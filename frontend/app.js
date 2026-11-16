@@ -1,0 +1,729 @@
+// ============================================================
+// GLOBAL STATE
+// ============================================================
+let provider, signer, contract, userAddress;
+const RESOURCE_META = {
+  0: { name: "Water",    icon: "💧", color: "#38bdf8", cls: "water" },
+  1: { name: "Clothing", icon: "👕", color: "#ec4899", cls: "clothing" },
+  2: { name: "Medicine", icon: "💊", color: "#10b981", cls: "medicine" },
+  3: { name: "Food",     icon: "🍞", color: "#f59e0b", cls: "food" },
+};
+const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+
+const HARDHAT_PRIVATE_KEY = "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+const HARDHAT_RPC = "http://127.0.0.1:8545";
+
+let regQueue = [];
+let updQueue = [];
+let resourceChartInstance = null;
+let statusChartInstance = null;
+let suppliersByResourceChartInstance = null;
+
+// ============================================================
+// HELPERS
+// ============================================================
+function setStatus(id, msg, type = "info") {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.className = "status " + type;
+  el.textContent = msg;
+}
+function shortAddr(a) { return a ? a.slice(0, 6) + "..." + a.slice(-4) : ""; }
+function fmtTime(ts) { return (!ts || ts == 0) ? "—" : new Date(Number(ts) * 1000).toLocaleString(); }
+function getErrorMessage(err) { return err?.reason || err?.shortMessage || err?.message || "Unknown error"; }
+
+function toast(type, msg) {
+  const container = document.getElementById("toastContainer");
+  if (!container) return;
+  const icons = { success: "✅", error: "❌", warning: "⚠️", info: "ℹ️" };
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  el.innerHTML = `<span class="toast-icon">${icons[type]}</span><div class="toast-body"><div class="toast-title">${type}</div><div class="toast-msg">${msg}</div></div>`;
+  container.appendChild(el);
+  setTimeout(() => { el.remove(); }, 4000);
+}
+
+function showLoading(show, text = "Processing...") {
+  const overlay = document.getElementById("loadingOverlay");
+  const txt = document.getElementById("loadingText");
+  if (!overlay) return;
+  overlay.classList.toggle("hidden", !show);
+  if (txt && text) txt.textContent = text;
+}
+
+function ensureConnected(statusId) {
+  if (!contract || !signer || !userAddress) {
+    if (statusId) setStatus(statusId, "❌ Click 'Connect Wallet' first.", "err");
+    toast("error", "Connect wallet first");
+    return false;
+  }
+  return true;
+}
+
+window.switchTab = function (name) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
+  document.querySelectorAll(".panel").forEach((p) => p.classList.remove("active"));
+  const tab = document.querySelector(`.tab[data-tab="${name}"]`);
+  const panel = document.getElementById(name);
+  if (tab) tab.classList.add("active");
+  if (panel) panel.classList.add("active");
+};
+
+document.querySelectorAll(".tab").forEach((tab) => {
+  tab.addEventListener("click", () => switchTab(tab.dataset.tab));
+});
+
+// ============================================================
+// CONNECT WALLET
+// ============================================================
+document.getElementById("connectBtn")?.addEventListener("click", async () => {
+  try {
+    provider = new ethers.JsonRpcProvider(HARDHAT_RPC);
+    const baseWallet = new ethers.Wallet(HARDHAT_PRIVATE_KEY, provider);
+    signer = baseWallet.connect(provider);
+    userAddress = await signer.getAddress();
+
+    contract = new ethers.Contract(window.CONTRACT_ADDRESS, window.CONTRACT_ABI, signer);
+
+    document.getElementById("walletAddress").textContent = shortAddr(userAddress);
+    document.getElementById("networkName").textContent = "Hardhat Local";
+    document.getElementById("walletInfo").classList.remove("hidden");
+    document.getElementById("connectBtn").textContent = "Connected";
+    document.getElementById("connectBtn").disabled = true;
+
+    toast("success", "Wallet connected successfully");
+    await refreshAll();
+    setInterval(() => { if (contract) refreshAll(); }, 15000);
+  } catch (err) { toast("error", getErrorMessage(err)); }
+});
+
+// ============================================================
+// REGISTER SUPPLIER
+// ============================================================
+document.getElementById("registerBtn")?.addEventListener("click", async () => {
+  if (!ensureConnected("registerStatus")) return;
+  try {
+    setStatus("registerStatus", "⏳ Sending transaction...", "info");
+    const fee = ethers.parseUnits("100000", "wei");
+    
+    await logTransaction({
+        title: "Register Supplier",
+        description: "Paid 100,000 wei registration fee",
+        icon: "👤", color: "#8b5cf6",
+        action: () => contract.registerSupplier({ value: fee })
+    });
+
+    setStatus("registerStatus", "✅ Registered successfully!", "ok");
+    await refreshAll();
+  } catch (err) { setStatus("registerStatus", "❌ " + getErrorMessage(err), "err"); }
+});
+
+// ============================================================
+// REGISTER RESOURCE (BATCH)
+// ============================================================
+function renderRegQueue() {
+  const list = document.getElementById("queueList");
+  const count = document.getElementById("queueCount");
+  const btn = document.getElementById("batchRegisterBtn");
+  if (!list) return;
+  if (count) count.textContent = `${regQueue.length} item${regQueue.length !== 1 ? "s" : ""}`;
+  if (btn) btn.disabled = regQueue.length === 0;
+
+  if (regQueue.length === 0) {
+    list.innerHTML = `<div class="queue-empty"><p>No resources added yet</p></div>`;
+    return;
+  }
+  list.innerHTML = regQueue.map((r, i) => {
+    const m = RESOURCE_META[r.type];
+    return `<div class="queue-item" style="--item-color: ${m.color}"><span class="q-icon">${m.icon}</span><span class="q-name">${m.name}</span><input type="number" min="1" placeholder="Qty" value="${r.qty}" oninput="updateRegQty(${i}, this.value)" /><button class="q-remove" onclick="removeRegQueue(${i})">✕</button></div>`;
+  }).join("");
+}
+window.updateRegQty = (i, v) => { if (regQueue[i]) regQueue[i].qty = v; };
+window.removeRegQueue = (i) => { regQueue.splice(i, 1); renderRegQueue(); };
+
+document.querySelectorAll('.resource-tile[data-type]').forEach((tile) => {
+  tile.addEventListener("click", () => {
+    const type = parseInt(tile.dataset.type);
+    if (regQueue.find((r) => r.type === type)) return toast("warning", "Already queued");
+    regQueue.push({ type, name: tile.dataset.name, qty: "" });
+    renderRegQueue();
+  });
+});
+document.getElementById("clearQueueBtn")?.addEventListener("click", () => { regQueue = []; renderRegQueue(); });
+
+document.getElementById("batchRegisterBtn")?.addEventListener("click", async () => {
+  if (!ensureConnected("batchStatus") || regQueue.length === 0) return;
+  for (const r of regQueue) { if (!r.qty || Number(r.qty) <= 0) return toast("error", `Quantity required for ${r.name}`); }
+
+  try {
+    showLoading(true, "Registering resources...");
+    for (const r of regQueue) {
+      const meta = RESOURCE_META[r.type];
+      
+      let isRegistered = false;
+      try {
+        const current = await contract.getSupplierResource(userAddress, r.type);
+        isRegistered = current.registered;
+      } catch (decodeErr) {
+        console.warn("Could not decode getSupplierResource, bypassing check.");
+      }
+
+      if (isRegistered) {
+        throw new Error(`You already registered ${r.name}. Use the 'Update' section below to change quantities.`);
+      }
+
+      await logTransaction({
+        title: `Register ${r.name}`,
+        description: `Registered ${r.name} with quantity ${r.qty}`, icon: meta.icon, color: meta.color, 
+        action: () => contract.registerResource(r.type, r.qty),
+      });
+      toast("success", `${r.name} registered!`);
+    }
+    regQueue = []; renderRegQueue();
+    setStatus("batchStatus", "✅ All resources registered!", "ok");
+    await refreshAll();
+  } catch (e) { setStatus("batchStatus", "❌ " + getErrorMessage(e), "err"); } finally { showLoading(false); }
+});
+
+// ============================================================
+// UPDATE QUEUE
+// ============================================================
+function renderUpdQueue() {
+  const list = document.getElementById("updQueueList");
+  const count = document.getElementById("updQueueCount");
+  const btn = document.getElementById("batchUpdateBtn");
+  if (!list) return;
+  if (count) count.textContent = `${updQueue.length} item${updQueue.length !== 1 ? "s" : ""}`;
+  if (btn) btn.disabled = updQueue.length === 0;
+
+  if (updQueue.length === 0) {
+    list.innerHTML = `<div class="queue-empty"><p>No updates queued</p></div>`;
+    return;
+  }
+  list.innerHTML = updQueue.map((r, i) => {
+    const m = RESOURCE_META[r.type];
+    return `<div class="queue-item" style="--item-color: ${m.color}"><span class="q-icon">${m.icon}</span><span class="q-name">${m.name}</span><input type="number" min="1" placeholder="New qty" value="${r.qty}" oninput="updateUpdQty(${i}, this.value)" /><button class="q-remove" onclick="removeUpdQueue(${i})">✕</button></div>`;
+  }).join("");
+}
+window.updateUpdQty = (i, v) => { if (updQueue[i]) updQueue[i].qty = v; };
+window.removeUpdQueue = (i) => { updQueue.splice(i, 1); renderUpdQueue(); };
+
+document.querySelectorAll('.resource-tile[data-update]').forEach((tile) => {
+  tile.addEventListener("click", () => {
+    const type = parseInt(tile.dataset.update);
+    if (updQueue.find((r) => r.type === type)) return toast("warning", "Already queued");
+    updQueue.push({ type, name: tile.dataset.name, qty: "" });
+    renderUpdQueue();
+  });
+});
+document.getElementById("clearUpdQueueBtn")?.addEventListener("click", () => { updQueue = []; renderUpdQueue(); });
+
+document.getElementById("batchUpdateBtn")?.addEventListener("click", async () => {
+  if (!ensureConnected("batchUpdStatus") || updQueue.length === 0) return;
+  for (const r of updQueue) { if (!r.qty || Number(r.qty) <= 0) return toast("error", `Quantity required for ${r.name}`); }
+
+  try {
+    showLoading(true, "Updating resources...");
+    for (const r of updQueue) {
+      const meta = RESOURCE_META[r.type];
+      
+      let isRegistered = false;
+      try {
+        const current = await contract.getSupplierResource(userAddress, r.type);
+        isRegistered = current.registered;
+      } catch (decodeErr) {
+        console.warn("Could not decode getSupplierResource, bypassing check.");
+        isRegistered = true; 
+      }
+
+      if (!isRegistered) {
+        throw new Error(`You have not registered ${r.name} yet! Register it first.`);
+      }
+      
+      const successMsg = `Updated ${r.name} to ${r.qty}`;
+      
+      await logTransaction({
+        title: `Update ${r.name}`, description: successMsg, icon: meta.icon, color: meta.color, successMessage: successMsg,
+        action: () => contract.updateResource(r.type, r.qty),
+      });
+      toast("success", `${r.name} updated!`);
+    }
+    updQueue = []; renderUpdQueue();
+    setStatus("batchUpdStatus", "✅ All updates complete!", "ok");
+    await refreshAll();
+  } catch (e) { setStatus("batchUpdStatus", "❌ " + getErrorMessage(e), "err"); } finally { showLoading(false); }
+});
+
+// ============================================================
+// COMPLIANCE
+// ============================================================
+document.getElementById("checkComplianceBtn")?.addEventListener("click", async () => {
+  if (!ensureConnected("complianceResult")) return;
+  try {
+    const addr = document.getElementById("complianceAddress").value.trim();
+    if (!ethers.isAddress(addr)) throw new Error("Invalid address format");
+    setStatus("complianceResult", "⏳ Checking...", "info");
+
+    const info = await contract.getSupplier(addr);
+    if (info.wallet === ZERO_ADDRESS) return setStatus("complianceResult", "❌ Not a registered supplier.", "err");
+    
+    const compliant = await contract.isCompliant(addr);
+    setStatus("complianceResult", compliant ? "✅ Supplier is COMPLIANT" : "❌ Supplier is NON-COMPLIANT", compliant ? "ok" : "err");
+  } catch (err) { setStatus("complianceResult", "❌ " + getErrorMessage(err), "err"); }
+});
+
+document.getElementById("deactivateBtn")?.addEventListener("click", async () => {
+  if (!ensureConnected("deactivateStatus")) return;
+  try {
+    const addr = document.getElementById("deactivateAddress").value.trim();
+    if (!ethers.isAddress(addr)) throw new Error("Invalid address");
+    setStatus("deactivateStatus", "⏳ Processing...", "info");
+    
+    const compliant = await contract.isCompliant(addr);
+    if (compliant) throw new Error("Supplier is compliant! Cannot deactivate.");
+
+    await logTransaction({
+        title: "Deactivate Supplier", description: `Deactivated ${shortAddr(addr)}`,
+        icon: "🚫", color: "#ef4444", action: () => contract.checkAndDeactivate(addr)
+    });
+
+    setStatus("deactivateStatus", "✅ Supplier deactivated", "ok");
+    await refreshAll();
+  } catch (err) { setStatus("deactivateStatus", "❌ " + getErrorMessage(err), "err"); }
+});
+
+// ============================================================
+// PENALTY
+// ============================================================
+document.getElementById("calcPenaltyBtn")?.addEventListener("click", async () => {
+  if (!ensureConnected("penaltyResult")) return;
+  try {
+    const penalty = await contract.calculatePenalty(userAddress);
+    setStatus("penaltyResult", "Applicable penalty: " + penalty.toString() + " wei", "info");
+  } catch (err) { setStatus("penaltyResult", "❌ " + getErrorMessage(err), "err"); }
+});
+
+document.getElementById("calcPenaltyInrBtn")?.addEventListener("click", async () => {
+  if (!ensureConnected("penaltyInrResult")) return;
+  try {
+    setStatus("penaltyInrResult", "⏳ Fetching live Chainlink price...", "info");
+    const penaltyInrRaw = await contract.calculatePenaltyInINR(userAddress);
+    
+    // Divide by 100 to get the 2 decimal places back
+    const formattedInr = (Number(penaltyInrRaw) / 100).toFixed(2);
+    
+    setStatus("penaltyInrResult", `Equivalent Penalty: ₹${formattedInr}`, "ok");
+  } catch (err) { 
+    setStatus("penaltyInrResult", "❌ " + getErrorMessage(err), "err"); 
+  }
+});
+
+document.getElementById("payPenaltyBtn")?.addEventListener("click", async () => {
+  if (!ensureConnected("payPenaltyStatus")) return;
+  try {
+    const penalty = await contract.calculatePenalty(userAddress);
+    if (penalty === 0n) throw new Error("No penalty to pay (already active?)");
+    setStatus("payPenaltyStatus", "⏳ Paying penalty...", "info");
+    
+    await logTransaction({
+        title: "Pay Penalty", description: `Paid ${penalty.toString()} wei penalty`,
+        icon: "💸", color: "#f59e0b", action: () => contract.payPenaltyAndReactivate({ value: penalty })
+    });
+
+    setStatus("payPenaltyStatus", "✅ Reactivated!", "ok");
+    await refreshAll();
+  } catch (err) { setStatus("payPenaltyStatus", "❌ " + getErrorMessage(err), "err"); }
+});
+
+// ============================================================
+// REFRESH ALL & DASHBOARD
+// ============================================================
+async function refreshAll() {
+  if (!contract) return;
+  try {
+    await refreshDashboard();
+    await refreshMyProfile();
+    await renderMyResources();
+    await refreshStats();
+  } catch (err) { console.error("refreshAll error:", err); }
+}
+
+async function refreshDashboard() {
+  try {
+    const [total, active, inactive, penalties] = await Promise.all([
+      contract.getTotalSuppliers(), 
+      contract.getActiveSuppliers(), 
+      contract.getInactiveSuppliers(), 
+      contract.totalPenaltiesCollected(),
+    ]);
+    
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    set("statTotal", total.toString()); 
+    set("statActive", active.toString());
+    set("statInactive", inactive.toString()); 
+    set("statPenalties", penalties.toString() + " wei");
+
+    const statusBadge = document.getElementById("myStatusBadge");
+    const profileBox = document.getElementById("dashboardMyProfile");
+    
+    if (userAddress) {
+      const s = await contract.getSupplier(userAddress);
+      if (s.wallet === ZERO_ADDRESS) {
+        statusBadge.textContent = "Unregistered";
+        statusBadge.style.color = "#fca5a5";
+        profileBox.innerHTML = `<p class="muted">You have not registered as a supplier yet.</p>`;
+      } else {
+        statusBadge.textContent = s.active ? "Active" : "Inactive";
+        statusBadge.style.color = s.active ? "#6ee7b7" : "#fca5a5";
+        statusBadge.style.background = s.active ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)";
+        
+        let isComp = false;
+        try { isComp = await contract.isCompliant(userAddress); } catch(e){}
+
+        profileBox.innerHTML = `
+          <div class="profile-row"><span>Account</span><b class="mono">${shortAddr(userAddress)}</b></div>
+          <div class="profile-row"><span>Compliance Status</span><b style="color:${isComp ? '#6ee7b7' : '#fca5a5'}">${isComp ? '✅ Compliant' : '❌ Non-Compliant'}</b></div>
+          <div class="profile-row"><span>Registered Resources</span><b>${s.resourceCount.toString()}</b></div>
+          <div class="profile-row"><span>Penalties Paid</span><b>${s.totalPenaltyPaid.toString()} wei</b></div>
+        `;
+      }
+    }
+
+    const feed = document.getElementById("dashboardRecentActivity");
+    if (feed && txLog.length > 0) {
+      const recent = txLog.slice(0, 3);
+      feed.innerHTML = recent.map(e => {
+        const time = new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+        return `
+          <div class="activity-item" style="border-left-color: ${e.status === 'ok' ? '#10b981' : e.status === 'fail' ? '#ef4444' : '#f59e0b'}">
+            <div class="activity-icon">${e.icon}</div>
+            <div class="activity-details">
+              <div class="activity-title">${e.title}</div>
+              <div class="activity-time">${time} • ${e.status.toUpperCase()}</div>
+            </div>
+          </div>
+        `;
+      }).join("");
+    } else if (feed) {
+      feed.innerHTML = `<p class="muted">No recent activity yet.</p>`;
+    }
+
+  } catch (e) { console.error("Dashboard refresh error:", e); }
+}
+
+async function refreshMyProfile() {
+  if (!userAddress) return;
+  try {
+    const s = await contract.getSupplier(userAddress);
+    const el = document.getElementById("myProfile");
+    if (!el) return;
+    if (s.wallet === ZERO_ADDRESS) {
+      el.innerHTML = "<b>Status:</b> ❌ Not registered yet.";
+      return;
+    }
+    el.innerHTML = `
+      <div class="profile-row"><span>Address</span><b>${shortAddr(s.wallet)}</b></div>
+      <div class="profile-row"><span>Registered</span><b>${fmtTime(s.registeredAt)}</b></div>
+      <div class="profile-row"><span>Verified</span><b>${s.verified ? "✅ Yes" : "❌ No"}</b></div>
+      <div class="profile-row"><span>Active</span><b>${s.active ? "✅ Yes" : "❌ No"}</b></div>
+      <div class="profile-row"><span>Resources</span><b>${s.resourceCount.toString()}</b></div>`;
+  } catch (e) { console.error(e); }
+}
+
+async function renderMyResources() {
+  const container = document.getElementById("myResourcesList");
+  if (!container) return;
+  if (!userAddress || !contract) return;
+
+  try {
+    const cards = [];
+    for (let i = 0; i < 4; i++) {
+      const r = await contract.getSupplierResource(userAddress, i);
+      if (!r.registered) continue;
+      const m = RESOURCE_META[i];
+      
+      let compliant = false;
+      let remaining = 0n;
+      try {
+        remaining = await contract.remainingComplianceTime(userAddress, i);
+        compliant = remaining > 0n;
+      } catch (err) {
+        const now = Math.floor(Date.now() / 1000);
+        compliant = (now - Number(r.lastUpdated)) < 86400;
+        remaining = compliant ? BigInt(86400 - (now - Number(r.lastUpdated))) : 0n;
+      }
+      
+      const hoursLeft = compliant ? Math.floor(Number(remaining) / 3600) : 0;
+      const badgeCls = compliant ? "ok" : "bad";
+      const badgeTxt = compliant ? "✅ Compliant" : "⚠️ Overdue";
+
+      cards.push(`
+        <div class="resource-card ${m.cls}">
+          <div class="rc-header"><span class="rc-icon">${m.icon}</span><span class="rc-name">${m.name}</span></div>
+          <div class="rc-qty">${r.quantity.toString()}</div>
+          <div class="rc-meta"><span>${compliant ? hoursLeft + "h left" : "Overdue"}</span><span class="rc-badge ${badgeCls}">${badgeTxt}</span></div>
+        </div>`);
+    }
+    container.innerHTML = cards.length ? cards.join("") : `<p class="muted">No resources registered yet</p>`;
+  } catch (e) { 
+    console.error(e); 
+    container.innerHTML = `<p class="muted">Error loading resources</p>`; 
+  }
+}
+
+document.getElementById("refreshMyResourcesBtn")?.addEventListener("click", () => { renderMyResources(); toast("info", "Resources refreshed"); });
+
+// ============================================================
+// STATISTICS & CHARTS
+// ============================================================
+async function refreshStats() {
+  if (!contract) return;
+
+  if (typeof Chart !== 'undefined') {
+    Chart.defaults.color = '#94a3b8';
+    Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+  }
+
+  try {
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+    
+    const [w, c, m, f] = await Promise.all([
+      contract.getAggregateQuantity(0), contract.getAggregateQuantity(1), 
+      contract.getAggregateQuantity(2), contract.getAggregateQuantity(3),
+    ]);
+    
+    set("aggWater", w.toString()); set("aggClothing", c.toString()); 
+    set("aggMedicine", m.toString()); set("aggFood", f.toString());
+
+    const active = await contract.getActiveSuppliers();
+    const inactive = await contract.getInactiveSuppliers();
+    
+    const [waterSups, clothingSups, medSups, foodSups] = await Promise.all([
+      contract.getSuppliersByResource(0), contract.getSuppliersByResource(1), 
+      contract.getSuppliersByResource(2), contract.getSuppliersByResource(3),
+    ]);
+
+    const ctxResource = document.getElementById('resourceChart');
+    if (ctxResource && typeof Chart !== 'undefined') {
+      if (resourceChartInstance) resourceChartInstance.destroy();
+      resourceChartInstance = new Chart(ctxResource, {
+        type: 'doughnut',
+        data: {
+          labels: ['Water 💧', 'Clothing 👕', 'Medicine 💊', 'Food 🍞'],
+          datasets: [{ data: [w, c, m, f], backgroundColor: ['#38bdf8', '#ec4899', '#10b981', '#f59e0b'], borderWidth: 0, hoverOffset: 10 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' }, tooltip: { backgroundColor: 'rgba(15, 15, 30, 0.9)' } }, cutout: '70%' }
+      });
+    }
+
+    const ctxStatus = document.getElementById('statusChart');
+    if (ctxStatus && typeof Chart !== 'undefined') {
+      if (statusChartInstance) statusChartInstance.destroy();
+      statusChartInstance = new Chart(ctxStatus, {
+        type: 'pie',
+        data: {
+          labels: ['Active', 'Inactive'],
+          datasets: [{ data: [active, inactive], backgroundColor: ['#10b981', '#ef4444'], borderWidth: 0, hoverOffset: 10 }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' }, tooltip: { backgroundColor: 'rgba(15, 15, 30, 0.9)' } } }
+      });
+    }
+
+    const ctxBar = document.getElementById('suppliersByResourceChart');
+    if (ctxBar && typeof Chart !== 'undefined') {
+      if (suppliersByResourceChartInstance) suppliersByResourceChartInstance.destroy();
+      suppliersByResourceChartInstance = new Chart(ctxBar, {
+        type: 'bar',
+        data: {
+          labels: ['Water', 'Clothing', 'Medicine', 'Food'],
+          datasets: [{ label: 'Number of Suppliers', data: [waterSups, clothingSups, medSups, foodSups], backgroundColor: ['rgba(56, 189, 248, 0.8)', 'rgba(236, 72, 153, 0.8)', 'rgba(16, 185, 129, 0.8)', 'rgba(245, 158, 11, 0.8)'], borderRadius: 6, borderSkipped: false }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: 'rgba(139, 92, 246, 0.1)' } }, x: { grid: { display: false } } }, plugins: { legend: { display: false } } }
+      });
+    }
+
+    const all = await contract.getAllSupplierAddresses();
+    let rows = "";
+    for (let i = 0; i < all.length; i++) {
+      const s = await contract.getSupplier(all[i]);
+      rows += `<tr><td>${i + 1}</td><td class="mono" style="font-size: 0.8rem;">${shortAddr(s.wallet)}</td><td>${s.verified ? "✅" : "❌"}</td><td>${s.active ? "✅" : "❌"}</td><td>${fmtTime(s.registeredAt)}</td><td>${s.resourceCount.toString()}</td></tr>`;
+    }
+    const body = document.getElementById("allSuppliersBody");
+    if (body) body.innerHTML = rows || `<tr><td colspan="6" class="muted" style="text-align: center;">No suppliers found</td></tr>`;
+
+  } catch (e) { console.error("Error refreshing stats:", e); }
+}
+
+document.getElementById("refreshStatsBtn")?.addEventListener("click", () => { 
+  if (!ensureConnected()) return; 
+  refreshStats(); 
+  toast("info", "Stats refreshed"); 
+});
+
+// ============================================================
+// TRANSACTION LOG SYSTEM (WITH LIVE GAS FEE)
+// ============================================================
+const LOG_STORAGE_KEY = "supplier_compliance_tx_log";
+let txLog = [];
+let txQueue = Promise.resolve();
+
+function loadLogs() { try { const raw = localStorage.getItem(LOG_STORAGE_KEY); txLog = raw ? JSON.parse(raw) : []; } catch { txLog = []; } }
+function saveLogs() { try { localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(txLog.slice(0, 200))); } catch {} }
+function updateLogBadge() { const badge = document.getElementById("txCountBadge"); if (badge) badge.textContent = txLog.length; }
+
+function addLog(entry) {
+  const log = {
+    id: Date.now() + Math.random(), title: entry.title || "Transaction", description: entry.description || "",
+    hash: entry.hash || "", status: entry.status || "ok", icon: entry.icon || "📝",
+    color: entry.color || "#8b5cf6", timestamp: entry.timestamp || new Date().toISOString(),
+    gasFee: entry.gasFee || "", gasInr: entry.gasInr || ""
+  };
+  txLog.unshift(log);
+  if (txLog.length > 200) txLog = txLog.slice(0, 200);
+  saveLogs(); renderLogs(); updateLogBadge();
+}
+
+function renderLogs() {
+  const list = document.getElementById("txLogList");
+  const empty = document.getElementById("txLogEmpty");
+  if (!list) return;
+  if (txLog.length === 0) { list.innerHTML = ""; if (empty) empty.style.display = "flex"; return; }
+  if (empty) empty.style.display = "none";
+
+  list.innerHTML = txLog.map((e) => {
+    const time = new Date(e.timestamp).toLocaleString();
+    const statusClass = e.status === "ok" ? "ok" : e.status === "pending" ? "pending" : "fail";
+    const statusLabel = e.status === "ok" ? "Confirmed" : e.status === "pending" ? "Pending" : "Failed";
+    const hashShort = e.hash ? e.hash.slice(0, 10) + "..." + e.hash.slice(-6) : "—";
+
+    return `
+      <div class="tx-entry" style="--tx-color: ${e.color}">
+        <div class="tx-icon-badge">${e.icon}</div>
+        <div class="tx-info"><div class="tx-title">${e.title}<span class="tx-status ${statusClass}">${statusLabel}</span></div><div class="tx-desc">${e.description}</div></div>
+        <div class="tx-time">${time}</div>
+        ${e.hash ? `
+        <div style="grid-column: 2 / 4; margin-top:.35rem; display: flex; gap: 0.8rem; align-items: center; flex-wrap: wrap;">
+          <span class="tx-hash" onclick="copyHash('${e.hash}')" title="Click to copy full hash">🔗 ${hashShort}</span>
+          ${e.gasFee ? `<span class="tx-gas" title="Live Gas Fee Paid">⛽ ${e.gasFee} <span style="color: var(--text-dim);">${e.gasInr || ''}</span></span>` : ''}
+        </div>` : ""}
+      </div>`;
+  }).join("");
+}
+
+window.copyHash = function (hash) { navigator.clipboard.writeText(hash); toast("success", "Transaction hash copied"); };
+
+async function logTransaction({ title, description, icon, color, action, successMessage }) {
+  const entry = { title, description, icon, color, status: "pending", hash: "", gasFee: "Calculating...", gasInr: "" };
+  
+  const promise = txQueue.then(async () => {
+    try {
+      const tx = await action();
+      entry.hash = tx.hash; 
+      addLog(entry);
+      
+      const rc = await tx.wait();
+      
+      // Calculate Gas Fee
+      let gasFeeStr = "—";
+      let gasInrStr = "";
+      
+      if (rc && rc.gasUsed && rc.gasPrice) {
+        const totalGasWei = rc.gasUsed * rc.gasPrice;
+        const totalGasEth = ethers.formatEther(totalGasWei);
+        gasFeeStr = `${parseFloat(totalGasEth).toFixed(6)} ETH`;
+        
+        try {
+          if (contract && contract.getLiveEthInrPrice) {
+            const ethInrPrice = await contract.getLiveEthInrPrice();
+            const inrValue = parseFloat(totalGasEth) * (Number(ethInrPrice) / 1e8);
+            gasInrStr = `(~ ₹${inrValue.toFixed(2)})`;
+          }
+        } catch (e) { console.warn("Could not fetch INR rate for gas", e); }
+      }
+
+      const idx = txLog.findIndex((e) => e.hash === tx.hash);
+      if (idx >= 0) {
+        txLog[idx].status = "ok"; 
+        txLog[idx].gasFee = gasFeeStr;
+        txLog[idx].gasInr = gasInrStr;
+        if (successMessage) txLog[idx].description = successMessage;
+        saveLogs(); renderLogs();
+      }
+      return rc;
+    } catch (err) {
+      addLog({ ...entry, status: "fail", description: description + " — Failed: " + (err?.reason || err?.message || "Unknown"), gasFee: "" });
+      throw err;
+    }
+  });
+  txQueue = promise.catch(() => {}); return promise;
+}
+
+document.getElementById("clearLogBtn")?.addEventListener("click", () => { if (!confirm("Clear all transaction logs?")) return; txLog = []; saveLogs(); renderLogs(); updateLogBadge(); toast("info", "Logs cleared"); });
+document.getElementById("toggleLogBtn")?.addEventListener("click", () => { const body = document.getElementById("txLogBody"); const text = document.getElementById("toggleLogText"); if (!body) return; body.classList.toggle("collapsed"); if (text) text.textContent = body.classList.contains("collapsed") ? "Expand" : "Collapse"; });
+
+document.getElementById("downloadLogBtn")?.addEventListener("click", () => {
+  if (txLog.length === 0) return toast("warning", "No logs to download");
+  const now = new Date(); 
+  const dateStr = now.toISOString().split("T")[0];
+  
+  let doc = "SUPPLIER COMPLIANCE DAPP - TRANSACTION LOG\n" + "=".repeat(60) + "\n\n";
+  doc += `Generated : ${now.toLocaleString()}\n`;
+  doc += `Records   : ${txLog.length}\n`;
+  doc += `Wallet    : ${userAddress || "N/A"}\n`;
+  doc += `Contract  : ${window.CONTRACT_ADDRESS}\n\n`;
+
+  txLog.forEach((e, i) => {
+    doc += `[${String(i + 1).padStart(3, "0")}] ${e.icon} ${e.title} [${e.status.toUpperCase()}]\n`;
+    doc += `      Time: ${new Date(e.timestamp).toLocaleString()}\n`;
+    doc += `      ${e.description}\n`;
+    if (e.hash) doc += `      TX  : ${e.hash}\n`;
+    if (e.gasFee) doc += `      GAS : ${e.gasFee} ${e.gasInr}\n`;
+    doc += "\n";
+  });
+
+  const blob = new Blob([doc], { type: "text/plain" }); 
+  const url = URL.createObjectURL(blob); 
+  const a = document.createElement("a");
+  a.href = url; 
+  a.download = `transaction-log-${dateStr}.txt`; 
+  a.click(); 
+  URL.revokeObjectURL(url);
+  toast("success", "Log downloaded");
+});
+
+// ============================================================
+// INITIALIZATION & TIME SIMULATION
+// ============================================================
+document.addEventListener("DOMContentLoaded", () => {
+  console.log("🚀 DApp initialized successfully");
+  
+  // Initialize UI components
+  renderRegQueue(); 
+  renderUpdQueue(); 
+  loadLogs(); 
+  renderLogs(); 
+  updateLogBadge();
+
+  // Attach Time Simulation Buttons
+  document.getElementById("fastForward25hBtn")?.addEventListener("click", async () => {
+    if (!provider) return toast("error", "Connect wallet first");
+    try {
+      showLoading(true, "Fast-forwarding 25 hours...");
+      await provider.send("evm_increaseTime", [25 * 3600]);
+      await provider.send("evm_mine", []);
+      toast("success", "Time advanced 25 hours!");
+      await refreshAll();
+    } catch (e) { toast("error", getErrorMessage(e)); } finally { showLoading(false); }
+  });
+
+  document.getElementById("fastForward3dBtn")?.addEventListener("click", async () => {
+    if (!provider) return toast("error", "Connect wallet first");
+    try {
+      showLoading(true, "Fast-forwarding 3 days...");
+      await provider.send("evm_increaseTime", [3 * 86400]);
+      await provider.send("evm_mine", []);
+      toast("success", "Time advanced 3 days!");
+      await refreshAll();
+    } catch (e) { toast("error", getErrorMessage(e)); } finally { showLoading(false); }
+  });
+});

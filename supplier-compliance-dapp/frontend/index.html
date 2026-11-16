@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Supplier Compliance DApp</title>
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.10.0/dist/ethers.umd.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">⛓️</span>
+    <div>
+      <h1>Supplier Compliance</h1>
+      <p>Blockchain Resource Management System</p>
+    </div>
+  </div>
+  <div class="wallet">
+    <button id="connectBtn" class="btn primary">Connect Wallet</button>
+    <div id="walletInfo" class="wallet-info hidden">
+      <span id="walletAddress"></span>
+      <span id="networkName" class="badge"></span>
+    </div>
+  </div>
+</header>
+
+<div id="connectionBanner" style="
+  display:none;
+  background: linear-gradient(90deg, #dc2626, #b91c1c);
+  color: white;
+  text-align: center;
+  padding: 0.6rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+">
+  ⚠️ Please click <b>"Connect Wallet"</b> in the top-right to enable transactions.
+</div>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="dashboard">📊 Dashboard</button>
+  <button class="tab" data-tab="register">📝 Register</button>
+  <button class="tab" data-tab="resources">📦 Resources</button>
+  <button class="tab" data-tab="compliance">✅ Compliance</button>
+  <button class="tab" data-tab="penalty">💰 Penalty</button>
+  <button class="tab" data-tab="stats">📈 Statistics</button>
+</nav>
+
+<main>
+  <!-- DASHBOARD -->
+  <section id="dashboard" class="panel active">
+    <h2>Welcome to the Supplier Compliance DApp</h2>
+    <div class="cards">
+      <div class="card">
+        <h3>Total Suppliers</h3>
+        <p id="statTotal">—</p>
+      </div>
+      <div class="card">
+        <h3>Active Suppliers</h3>
+        <p id="statActive">—</p>
+      </div>
+      <div class="card">
+        <h3>Inactive Suppliers</h3>
+        <p id="statInactive">—</p>
+      </div>
+      <div class="card">
+        <h3>Total Penalties Collected</h3>
+        <p id="statPenalties">—</p>
+      </div>
+    </div>
+    <div class="info-box">
+      <h3>How it works</h3>
+      <ol>
+        <li>Connect MetaMask wallet (import a Hardhat test account).</li>
+        <li>Register by paying exactly <b>100,000 wei</b>.</li>
+        <li>Register resources: Water, Clothing, Medicine, Food.</li>
+        <li>Update each resource quantity within <b>1 day</b> to stay compliant.</li>
+        <li>Non-compliant suppliers get deactivated; pay penalty to reactivate.</li>
+      </ol>
+    </div>
+  </section>
+
+  <!-- REGISTER -->
+  <section id="register" class="panel">
+  <h2>Supplier Registration</h2>
+  <p>Pay the fixed registration fee of <b>100,000 wei</b> to register.</p>
+  <button id="registerBtn" class="btn primary">Register Supplier (100,000 wei)</button>
+  <div id="registerStatus" class="status"></div>
+  <div class="info-box">
+    <h3>Your Supplier Profile</h3>
+    <div id="myProfile">Not connected / Not registered</div>
+  </div>
+</section>
+
+  <!-- RESOURCES -->
+  <!-- ============ RESOURCES ============ -->
+<section id="resources" class="panel">
+  <div class="panel-header">
+    <h2>Resource Management</h2>
+    <p>Register and update your humanitarian resources — batch mode supported</p>
+  </div>
+
+  <!-- =============== BATCH REGISTRATION =============== -->
+  <div class="card resource-builder">
+    <div class="builder-header">
+      <h3>➕ Register Multiple Resources</h3>
+      <span class="builder-hint">Click <b>+</b> to add a resource, then set its quantity</span>
+    </div>
+
+    <!-- Resource picker tiles -->
+    <div class="resource-tiles">
+      <button type="button" class="resource-tile water" data-type="0" data-name="Water">
+        <span class="tile-icon">💧</span>
+        <span class="tile-name">Water</span>
+        <span class="tile-plus">+</span>
+      </button>
+      <button type="button" class="resource-tile clothing" data-type="1" data-name="Clothing">
+        <span class="tile-icon">👕</span>
+        <span class="tile-name">Clothing</span>
+        <span class="tile-plus">+</span>
+      </button>
+      <button type="button" class="resource-tile medicine" data-type="2" data-name="Medicine">
+        <span class="tile-icon">💊</span>
+        <span class="tile-name">Medicine</span>
+        <span class="tile-plus">+</span>
+      </button>
+      <button type="button" class="resource-tile food" data-type="3" data-name="Food">
+        <span class="tile-icon">🍞</span>
+        <span class="tile-name">Food</span>
+        <span class="tile-plus">+</span>
+      </button>
+    </div>
+
+    <!-- Selected resources queue -->
+    <div class="builder-queue">
+      <div class="queue-header">
+        <span>Selected Resources</span>
+        <span class="queue-count" id="queueCount">0 items</span>
+      </div>
+      <div id="queueList" class="queue-list">
+        <div class="queue-empty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+          </svg>
+          <p>No resources added yet</p>
+          <small>Click the resource tiles above to add them</small>
+        </div>
+      </div>
+    </div>
+
+    <!-- Batch actions -->
+    <div class="builder-actions">
+      <button id="batchRegisterBtn" class="btn btn-gradient btn-lg" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>
+        Register All Selected
+      </button>
+      <button id="clearQueueBtn" class="btn btn-ghost">Clear Queue</button>
+    </div>
+
+    <div id="batchStatus" class="status"></div>
+  </div>
+
+  <!-- =============== BATCH UPDATE =============== -->
+  <div class="card resource-builder">
+    <div class="builder-header">
+      <h3>🔄 Update Multiple Quantities</h3>
+      <span class="builder-hint">Add resources and set new quantities, then submit</span>
+    </div>
+
+    <div class="resource-tiles">
+      <button type="button" class="resource-tile water" data-update="0" data-name="Water">
+        <span class="tile-icon">💧</span>
+        <span class="tile-name">Water</span>
+        <span class="tile-plus">+</span>
+      </button>
+      <button type="button" class="resource-tile clothing" data-update="1" data-name="Clothing">
+        <span class="tile-icon">👕</span>
+        <span class="tile-name">Clothing</span>
+        <span class="tile-plus">+</span>
+      </button>
+      <button type="button" class="resource-tile medicine" data-update="2" data-name="Medicine">
+        <span class="tile-icon">💊</span>
+        <span class="tile-name">Medicine</span>
+        <span class="tile-plus">+</span>
+      </button>
+      <button type="button" class="resource-tile food" data-update="3" data-name="Food">
+        <span class="tile-icon">🍞</span>
+        <span class="tile-name">Food</span>
+        <span class="tile-plus">+</span>
+      </button>
+    </div>
+
+    <div class="builder-queue">
+      <div class="queue-header">
+        <span>Update Queue</span>
+        <span class="queue-count" id="updQueueCount">0 items</span>
+      </div>
+      <div id="updQueueList" class="queue-list">
+        <div class="queue-empty">
+          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3">
+            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+          </svg>
+          <p>No updates queued</p>
+          <small>Click the tiles above to queue an update</small>
+        </div>
+      </div>
+    </div>
+
+    <div class="builder-actions">
+      <button id="batchUpdateBtn" class="btn btn-gradient btn-lg" disabled>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 4v6h-6M1 20v-6h6"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+        Update All Queued
+      </button>
+      <button id="clearUpdQueueBtn" class="btn btn-ghost">Clear Queue</button>
+    </div>
+
+    <div id="batchUpdStatus" class="status"></div>
+  </div>
+
+  <!-- =============== CURRENT RESOURCES =============== -->
+  <div class="card">
+    <div class="builder-header">
+      <h3>📋 Your Registered Resources</h3>
+      <button id="refreshMyResourcesBtn" class="btn btn-sm btn-ghost">🔄 Refresh</button>
+    </div>
+    <div id="myResourcesList" class="resources-grid">
+      <p class="muted">No resources registered yet</p>
+    </div>
+  </div>
+</section>
+
+  <!-- COMPLIANCE -->
+  <section id="compliance" class="panel">
+    <h2>Compliance Monitoring</h2>
+    <div class="info-box">
+      <p>Each registered resource must be updated within <b>1 day</b>. If not, the supplier becomes non-compliant.</p>
+    </div>
+    <div class="form-card">
+      <h3>Check a Supplier</h3>
+      <input type="text" id="complianceAddress" placeholder="0x..." />
+      <button id="checkComplianceBtn" class="btn primary">Check Compliance</button>
+      <div id="complianceResult" class="status"></div>
+    </div>
+    <div class="form-card">
+      <h3>Deactivate Non-Compliant Supplier</h3>
+      <input type="text" id="deactivateAddress" placeholder="0x..." />
+      <button id="deactivateBtn" class="btn danger">Deactivate Supplier</button>
+      <div id="deactivateStatus" class="status"></div>
+    </div>
+  </section>
+
+  <!-- PENALTY -->
+  <section id="penalty" class="panel">
+    <h2>Penalty & Reactivation</h2>
+    <div class="info-box">
+      <h3>Penalty Rates</h3>
+      <ul>
+        <li>0–1 day non-compliant: <b>200,000 wei</b></li>
+        <li>2–7 days: <b>400,000 wei</b></li>
+        <li>8–21 days: <b>800,000 wei</b></li>
+        <li>&gt;21 days: <b>1,000,000 wei</b></li>
+      </ul>
+    </div>
+    <button id="calcPenaltyBtn" class="btn primary">Calculate My Penalty</button>
+    <div id="penaltyResult" class="status"></div>
+    <button id="payPenaltyBtn" class="btn success">Pay Penalty & Reactivate</button>
+    <div id="payPenaltyStatus" class="status"></div>
+  </section>
+
+  <!-- STATS -->
+  <section id="stats" class="panel">
+    <h2>Statistics</h2>
+    <div class="cards">
+      <div class="card"><h3>Water (aggregate)</h3><p id="aggWater">—</p></div>
+      <div class="card"><h3>Clothing (aggregate)</h3><p id="aggClothing">—</p></div>
+      <div class="card"><h3>Medicine (aggregate)</h3><p id="aggMedicine">—</p></div>
+      <div class="card"><h3>Food (aggregate)</h3><p id="aggFood">—</p></div>
+    </div>
+    <div class="cards">
+      <div class="card"><h3>Suppliers for Water</h3><p id="cntWater">—</p></div>
+      <div class="card"><h3>Suppliers for Clothing</h3><p id="cntClothing">—</p></div>
+      <div class="card"><h3>Suppliers for Medicine</h3><p id="cntMedicine">—</p></div>
+      <div class="card"><h3>Suppliers for Food</h3><p id="cntFood">—</p></div>
+    </div>
+    <button id="refreshStatsBtn" class="btn primary">Refresh Statistics</button>
+
+    <h3>All Suppliers</h3>
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>Address</th>
+          <th>Verified</th>
+          <th>Active</th>
+          <th>Registered At</th>
+        </tr>
+      </thead>
+      <tbody id="allSuppliersBody">
+        <tr><td colspan="5">No data</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <!-- ============ TRANSACTION LOG PANEL ============ -->
+<section class="tx-log-panel">
+  <div class="tx-log-header">
+    <div class="tx-log-title">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/>
+      </svg>
+      <h3>Transaction Log</h3>
+      <span class="tx-count-badge" id="txCountBadge">0</span>
+    </div>
+    <div class="tx-log-actions">
+      <button class="btn btn-ghost btn-sm" id="toggleLogBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+        <span id="toggleLogText">Collapse</span>
+      </button>
+      <button class="btn btn-ghost btn-sm" id="clearLogBtn">Clear</button>
+      <button class="btn btn-gradient btn-sm" id="downloadLogBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+          <polyline points="7 10 12 15 17 10"/>
+          <line x1="12" y1="15" x2="12" y2="3"/>
+        </svg>
+        Download Log
+      </button>
+    </div>
+  </div>
+
+  <div class="tx-log-body" id="txLogBody">
+    <div class="tx-log-empty" id="txLogEmpty">
+      <svg width="42" height="42" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" opacity="0.3">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+        <path d="M14 2v6h6"/>
+      </svg>
+      <p>No transactions yet</p>
+      <small>Transactions you submit will appear here</small>
+    </div>
+    <div class="tx-log-list" id="txLogList"></div>
+  </div>
+</section>
+</main>
+
+<footer>
+  <p>Blockchain Supplier Compliance DApp · Built with Solidity + Hardhat + Ethers.js</p>
+</footer>
+
+<script src="contract-info.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

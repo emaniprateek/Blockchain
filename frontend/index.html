@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Supplier Compliance DApp</title>
+<link rel="stylesheet" href="style.css" />
+<script src="https://cdn.jsdelivr.net/npm/ethers@6.10.0/dist/ethers.umd.min.js"></script>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">⛓️</span>
+    <div>
+      <h1>Supplier Compliance</h1>
+      <p>Blockchain Resource Management System</p>
+    </div>
+  </div>
+  <div class="wallet">
+    <button id="connectBtn" class="btn primary">Connect Wallet</button>
+    <div id="walletInfo" class="wallet-info hidden">
+      <span id="walletAddress"></span>
+      <span id="networkName" class="badge"></span>
+    </div>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="dashboard">📊 Dashboard</button>
+  <button class="tab" data-tab="register">📝 Register</button>
+  <button class="tab" data-tab="resources">📦 Resources</button>
+  <button class="tab" data-tab="compliance">✅ Compliance</button>
+  <button class="tab" data-tab="penalty">💰 Penalty</button>
+  <button class="tab" data-tab="stats">📈 Statistics</button>
+</nav>
+
+<main>
+  <!-- DASHBOARD -->
+  <section id="dashboard" class="panel active">
+    <div class="panel-header">
+      <h2>Network Overview</h2>
+      <p>Real-time analytics and resource management status</p>
+    </div>
+    <div class="stats-grid">
+      <div class="stat-card purple"><div class="stat-label">Total Suppliers</div><div class="stat-value" id="statTotal">0</div></div>
+      <div class="stat-card green"><div class="stat-label">Active Suppliers</div><div class="stat-value" id="statActive">0</div></div>
+      <div class="stat-card red"><div class="stat-label">Inactive Suppliers</div><div class="stat-value" id="statInactive">0</div></div>
+      <div class="stat-card gold"><div class="stat-label">Total Penalties</div><div class="stat-value" id="statPenalties" style="font-size: 1.4rem; margin-top: 0.5rem;">0 wei</div></div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <div class="builder-header" style="margin-bottom: 1rem;">
+          <h3>🛡️ Your Status</h3>
+          <span class="badge" id="myStatusBadge" style="background: var(--bg-1);">Not Connected</span>
+        </div>
+        <div id="dashboardMyProfile" style="font-size: 0.9rem;"><p class="muted">Connect your wallet to view your personal status.</p></div>
+        <div style="margin-top: 1.5rem; border-top: 1px solid var(--border); padding-top: 1rem;">
+          <h3 style="font-size: 0.9rem; color: #a5b4fc; margin-bottom: 0.8rem;">Quick Actions</h3>
+          <div style="display: flex; gap: 0.8rem;">
+            <button class="btn btn-gradient" onclick="switchTab('register')" style="flex: 1;">📝 Register</button>
+            <button class="btn btn-ghost" onclick="switchTab('resources')" style="flex: 1;">📦 Manage Resources</button>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="builder-header" style="margin-bottom: 1rem;">
+          <h3>📡 Recent Activity</h3>
+          <span class="badge" style="background: rgba(6,182,212,0.15); color: #22d3ee;">Live Feed</span>
+        </div>
+        <div id="dashboardRecentActivity" style="display: flex; flex-direction: column; gap: 0.8rem;"><p class="muted">No recent transactions.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- REGISTER -->
+  <section id="register" class="panel">
+    <h2>Supplier Registration</h2>
+    <p>Pay the fixed registration fee of <b>100,000 wei</b> to register.</p>
+    <button id="registerBtn" class="btn primary">Register Supplier (100,000 wei)</button>
+    <div id="registerStatus" class="status"></div>
+    <div class="info-box"><h3>Your Supplier Profile</h3><div id="myProfile">Not connected / Not registered</div></div>
+  </section>
+
+  <!-- RESOURCES -->
+  <section id="resources" class="panel">
+    <div class="panel-header">
+      <h2>Resource Management</h2>
+      <p>Register and update your humanitarian resources — batch mode supported</p>
+    </div>
+    <div class="card resource-builder">
+      <div class="builder-header"><h3>➕ Register Multiple Resources</h3></div>
+      <div class="resource-tiles">
+        <button type="button" class="resource-tile water" data-type="0" data-name="Water"><span class="tile-icon">💧</span><span class="tile-name">Water</span><span class="tile-plus">+</span></button>
+        <button type="button" class="resource-tile clothing" data-type="1" data-name="Clothing"><span class="tile-icon">👕</span><span class="tile-name">Clothing</span><span class="tile-plus">+</span></button>
+        <button type="button" class="resource-tile medicine" data-type="2" data-name="Medicine"><span class="tile-icon">💊</span><span class="tile-name">Medicine</span><span class="tile-plus">+</span></button>
+        <button type="button" class="resource-tile food" data-type="3" data-name="Food"><span class="tile-icon">🍞</span><span class="tile-name">Food</span><span class="tile-plus">+</span></button>
+      </div>
+      <div class="builder-queue">
+        <div class="queue-header"><span>Selected Resources</span><span class="queue-count" id="queueCount">0 items</span></div>
+        <div id="queueList" class="queue-list"><div class="queue-empty"><p>No resources added yet</p></div></div>
+      </div>
+      <div class="builder-actions">
+        <button id="batchRegisterBtn" class="btn btn-gradient btn-lg" disabled>Register All Selected</button>
+        <button id="clearQueueBtn" class="btn btn-ghost">Clear Queue</button>
+      </div>
+      <div id="batchStatus" class="status"></div>
+    </div>
+    <div class="card resource-builder">
+      <div class="builder-header"><h3>🔄 Update Multiple Quantities</h3></div>
+      <div class="resource-tiles">
+        <button type="button" class="resource-tile water" data-update="0" data-name="Water"><span class="tile-icon">💧</span><span class="tile-name">Water</span><span class="tile-plus">+</span></button>
+        <button type="button" class="resource-tile clothing" data-update="1" data-name="Clothing"><span class="tile-icon">👕</span><span class="tile-name">Clothing</span><span class="tile-plus">+</span></button>
+        <button type="button" class="resource-tile medicine" data-update="2" data-name="Medicine"><span class="tile-icon">💊</span><span class="tile-name">Medicine</span><span class="tile-plus">+</span></button>
+        <button type="button" class="resource-tile food" data-update="3" data-name="Food"><span class="tile-icon">🍞</span><span class="tile-name">Food</span><span class="tile-plus">+</span></button>
+      </div>
+      <div class="builder-queue">
+        <div class="queue-header"><span>Update Queue</span><span class="queue-count" id="updQueueCount">0 items</span></div>
+        <div id="updQueueList" class="queue-list"><div class="queue-empty"><p>No updates queued</p></div></div>
+      </div>
+      <div class="builder-actions">
+        <button id="batchUpdateBtn" class="btn btn-gradient btn-lg" disabled>Update All Queued</button>
+        <button id="clearUpdQueueBtn" class="btn btn-ghost">Clear Queue</button>
+      </div>
+      <div id="batchUpdStatus" class="status"></div>
+    </div>
+    <div class="card">
+      <div class="builder-header"><h3>📋 Your Registered Resources</h3><button id="refreshMyResourcesBtn" class="btn btn-sm btn-ghost">🔄 Refresh</button></div>
+      <div id="myResourcesList" class="resources-grid"><p class="muted">No resources registered yet</p></div>
+    </div>
+  </section>
+
+  <!-- COMPLIANCE -->
+  <section id="compliance" class="panel">
+    <div class="form-card" style="margin-top: 1rem; border-color: #f59e0b;">
+      <h2 style="color: #f59e0b; margin-bottom: 0.5rem;">⏳ Time Simulation (Hardhat Test Tool)</h2>
+      <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+        <button id="fastForward25hBtn" class="btn" style="background: #f59e0b; color: white;">Fast-Forward 25 Hours</button>
+        <button id="fastForward3dBtn" class="btn" style="background: #f59e0b; color: white;">Fast-Forward 3 Days</button>
+      </div>
+    </div>
+    <h2>Compliance Monitoring</h2>
+    <div class="form-card">
+      <h3>Check a Supplier</h3>
+      <input type="text" id="complianceAddress" placeholder="0x..." />
+      <button id="checkComplianceBtn" class="btn primary">Check Compliance</button>
+      <div id="complianceResult" class="status"></div>
+    </div>
+    <div class="form-card">
+      <h3>Deactivate Non-Compliant Supplier</h3>
+      <input type="text" id="deactivateAddress" placeholder="0x..." />
+      <button id="deactivateBtn" class="btn danger">Deactivate Supplier</button>
+      <div id="deactivateStatus" class="status"></div>
+    </div>
+  </section>
+
+  <!-- PENALTY -->
+  <section id="penalty" class="panel">
+    <h2>Penalty & Reactivation</h2>
+    <div class="info-box">
+      <h3>Penalty Rates</h3>
+      <ul>
+        <li>0–1 day: <b>200,000 wei</b></li>
+        <li>2–7 days: <b>400,000 wei</b></li>
+        <li>8–21 days: <b>800,000 wei</b></li>
+        <li>&gt;21 days: <b>1,000,000 wei</b></li>
+      </ul>
+    </div>
+    
+    <div style="display: flex; gap: 1rem; margin-bottom: 1rem;">
+        <button id="calcPenaltyBtn" class="btn primary">Calculate Penalty (Wei)</button>
+        <button id="calcPenaltyInrBtn" class="btn btn-gradient" style="background: linear-gradient(135deg, #f59e0b, #f97316);">Calculate Penalty (INR)</button>
+    </div>
+    
+    <div id="penaltyResult" class="status"></div>
+    <div id="penaltyInrResult" class="status"></div>
+
+    <button id="payPenaltyBtn" class="btn success" style="margin-top: 1rem;">Pay Penalty & Reactivate</button>
+    <div id="payPenaltyStatus" class="status"></div>
+  </section>
+
+  <!-- STATS -->
+  <!-- STATS -->
+<section id="stats" class="panel">
+  <div class="panel-header">
+    <h2>Network Analytics</h2>
+    <p>Visual insights into supplier compliance and resource distribution</p>
+  </div>
+
+  <!-- Top Stat Cards -->
+  <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr);">
+    <div class="stat-card blue">
+      <span class="stat-label">TOTAL WATER</span>
+      <span class="stat-value" id="aggWater">—</span>
+    </div>
+    <div class="stat-card pink">
+      <span class="stat-label">TOTAL CLOTHING</span>
+      <span class="stat-value" id="aggClothing">—</span>
+    </div>
+    <div class="stat-card mint">
+      <span class="stat-label">TOTAL MEDICINE</span>
+      <span class="stat-value" id="aggMedicine">—</span>
+    </div>
+    <div class="stat-card orange">
+      <span class="stat-label">TOTAL FOOD</span>
+      <span class="stat-value" id="aggFood">—</span>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="two-col" style="grid-template-columns: 1fr 1fr; margin-bottom: 2rem;">
+    <div class="card">
+      <h3>📦 Resource Distribution</h3>
+      <div style="position: relative; height: 300px;">
+        <canvas id="resourceChart"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <h3>👥 Supplier Status</h3>
+      <div style="position: relative; height: 300px;">
+        <canvas id="statusChart"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Data Table -->
+  <div class="card">
+    <div class="builder-header">
+      <h3>📋 All Registered Suppliers</h3>
+      <div style="display: flex; gap: 1rem;">
+        <button id="refreshStatsBtn" class="btn btn-ghost btn-sm">🔄 Refresh Data</button>
+        <button id="exportExcelBtn" class="btn btn-gradient btn-sm">📥 Export to Excel</button>
+      </div>
+    </div>
+    
+    <table class="data-table" style="width: 100%; text-align: left; border-collapse: collapse; margin-top: 1rem;">
+      <thead>
+        <tr style="border-bottom: 2px solid var(--border-strong);">
+          <th style="padding: 12px;">#</th>
+          <th style="padding: 12px;">Wallet Address</th>
+          <th style="padding: 12px;">Verified</th>
+          <th style="padding: 12px;">Active</th>
+          <th style="padding: 12px;">Registered At</th>
+          <th style="padding: 12px;">Resources</th>
+        </tr>
+      </thead>
+      <tbody id="allSuppliersBody">
+        <tr><td colspan="6" style="text-align: center; padding: 2rem;">Click Refresh to load data</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+  <!-- TRANSACTION LOG -->
+  <section class="tx-log-panel">
+    <div class="tx-log-header">
+      <div class="tx-log-title"><h3>Transaction Log</h3><span class="tx-count-badge" id="txCountBadge">0</span></div>
+      <div class="tx-log-actions">
+        <button class="btn btn-ghost btn-sm" id="toggleLogBtn"><span id="toggleLogText">Collapse</span></button>
+        <button class="btn btn-ghost btn-sm" id="clearLogBtn">Clear</button>
+        <button class="btn btn-gradient btn-sm" id="downloadLogBtn">Download Log</button>
+      </div>
+    </div>
+    <div class="tx-log-body" id="txLogBody">
+      <div class="tx-log-empty" id="txLogEmpty"><p>No transactions yet</p></div>
+      <div class="tx-log-list" id="txLogList"></div>
+    </div>
+  </section>
+</main>
+
+<footer><p>Blockchain Supplier Compliance DApp</p></footer>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="contract-info.js"></script>
+<script src="app.js?v=10003"></script> 
+</body>
+</html>
