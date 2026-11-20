@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Login - Supplier Compliance DApp</title>
+<link rel="stylesheet" href="style.css" />
+<style>
+  /* Specific styles for the login page */
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+    margin: 0;
+  }
+  .login-container {
+    background: rgba(30, 30, 55, 0.7);
+    backdrop-filter: blur(20px);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    border-radius: 20px;
+    padding: 3rem;
+    width: 100%;
+    max-width: 400px;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.5);
+    text-align: center;
+  }
+  .login-container h2 {
+    color: #c4b5fd;
+    margin-bottom: 0.5rem;
+    font-size: 1.8rem;
+  }
+  .login-container p {
+    color: var(--text-muted);
+    margin-bottom: 2rem;
+    font-size: 0.9rem;
+  }
+  .input-group {
+    text-align: left;
+    margin-bottom: 1.2rem;
+  }
+  .input-group label {
+    font-size: 0.85rem;
+    color: var(--text-muted);
+    margin-bottom: 0.4rem;
+    display: block;
+  }
+  .input-group input {
+    width: 100%;
+    padding: 0.8rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
+    background: var(--bg-1);
+    color: var(--text);
+    font-size: 1rem;
+  }
+  .input-group input:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+  .btn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    margin-top: 2rem;
+  }
+  .login-error {
+    color: #ef4444;
+    font-size: 0.85rem;
+    margin-top: 1rem;
+    display: none;
+  }
+</style>
+</head>
+<body>
+  <div class="login-container">
+    <h2>Supplier Compliance</h2>
+    <p>Blockchain Resource Management System</p>
+    
+    <div class="input-group">
+      <label>Username</label>
+      <input type="text" id="username" placeholder="Enter username" />
+    </div>
+    
+    <div class="input-group">
+      <label>Password</label>
+      <input type="password" id="password" placeholder="Enter password" />
+    </div>
+
+    <div class="login-error" id="loginError">Invalid credentials. Please try again.</div>
+
+    <div class="btn-group">
+      <button id="loginAdminBtn" class="btn btn-gradient btn-lg">Sign in as Admin</button>
+      <button id="loginUserBtn" class="btn btn-ghost btn-lg">Sign in as User</button>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById("loginAdminBtn").addEventListener("click", () => handleLogin("admin"));
+    document.getElementById("loginUserBtn").addEventListener("click", () => handleLogin("user"));
+
+    function handleLogin(role) {
+      const user = document.getElementById("username").value.trim();
+      const pass = document.getElementById("password").value;
+      const errorBox = document.getElementById("loginError");
+
+      if (user === "user" && pass === "pass@123") {
+        // Save the role in localStorage
+        localStorage.setItem("dapp_role", role);
+        // Redirect to the main app
+        window.location.href = "index.html";
+      } else {
+        errorBox.style.display = "block";
+        setTimeout(() => { errorBox.style.display = "none"; }, 3000);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -3,6 +3,12 @@
 <head>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
+<script>
+  // Route protection
+  if (!localStorage.getItem("dapp_role")) {
+    window.location.href = "login.html";
+  }
+</script>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Supplier Compliance DApp</title>
@@ -182,73 +188,167 @@
 
   <!-- STATS -->
   <!-- STATS -->
+<!-- STATS -->
 <section id="stats" class="panel">
   <div class="panel-header">
     <h2>Network Analytics</h2>
-    <p>Visual insights into supplier compliance and resource distribution</p>
+    <p>Interactive supply, demand &amp; compliance insights — filter everything live</p>
   </div>
 
-  <!-- Top Stat Cards -->
-  <div class="stats-grid" style="grid-template-columns: repeat(4, 1fr);">
+  <!-- 5.1 GLOBAL FILTER BAR -->
+  <div class="filter-bar">
+    <div class="filter-group">
+      <label>Time Granularity</label>
+      <select id="fGranularity">
+        <option value="daily">Daily</option>
+        <option value="monthly" selected>Monthly</option>
+        <option value="yearly">Yearly</option>
+      </select>
+    </div>
+
+    <div class="filter-group">
+      <label>From Date</label>
+      <input type="date" id="fFromDate" />
+    </div>
+
+    <div class="filter-group">
+      <label>To Date</label>
+      <input type="date" id="fToDate" />
+    </div>
+
+    <div class="filter-group">
+      <label>Event</label>
+      <select id="fEvent">
+        <option value="all">All Events</option>
+        <option value="flood2026">Flood Relief 2026</option>
+        <option value="earthquake">Earthquake Response</option>
+        <option value="routine">Routine Operations</option>
+      </select>
+    </div>
+
+    <div class="filter-group">
+      <label>Resource Type</label>
+      <select id="fResource">
+        <option value="all">All Resources</option>
+        <option value="0">💧 Water</option>
+        <option value="1">👕 Clothing</option>
+        <option value="2">💊 Medicine</option>
+        <option value="3">🍞 Food</option>
+      </select>
+    </div>
+
+    <div class="filter-group">
+      <label>Supplier Status</label>
+      <select id="fSupplierStatus">
+        <option value="all">All Statuses</option>
+        <option value="active">Active</option>
+        <option value="inactive">Inactive</option>
+        <option value="compliant">Compliant</option>
+        <option value="non-compliant">Non-Compliant</option>
+      </select>
+    </div>
+
+    <button id="applyFiltersBtn" class="btn btn-gradient btn-sm" style="align-self:flex-end; height:38px;">Apply Filters</button>
+    <button id="resetFiltersBtn" class="btn btn-ghost btn-sm" style="align-self:flex-end; height:38px;">Reset</button>
+  </div>
+
+  <!-- 5.2 TOP-LEVEL KPI SUMMARY CARDS -->
+  <div class="stats-grid kpi-grid">
     <div class="stat-card blue">
-      <span class="stat-label">TOTAL WATER</span>
-      <span class="stat-value" id="aggWater">—</span>
+      <span class="stat-label">Total Supply Available</span>
+      <span class="stat-value" id="kpiSupply">—</span>
+      <span class="kpi-sub" id="kpiSupplySub">from active &amp; compliant</span>
     </div>
     <div class="stat-card pink">
-      <span class="stat-label">TOTAL CLOTHING</span>
-      <span class="stat-value" id="aggClothing">—</span>
+      <span class="stat-label">Total Demand Requested</span>
+      <span class="stat-value" id="kpiDemand">—</span>
+      <span class="kpi-sub">across events</span>
     </div>
     <div class="stat-card mint">
-      <span class="stat-label">TOTAL MEDICINE</span>
-      <span class="stat-value" id="aggMedicine">—</span>
+      <span class="stat-label">Net Surplus / Deficit</span>
+      <span class="stat-value" id="kpiNet">—</span>
+      <span class="kpi-sub" id="kpiNetSub">supply − demand</span>
     </div>
     <div class="stat-card orange">
-      <span class="stat-label">TOTAL FOOD</span>
-      <span class="stat-value" id="aggFood">—</span>
+      <span class="stat-label">Fulfillment Rate</span>
+      <span class="stat-value" id="kpiFulfill">—</span>
+      <div class="progress-track"><div class="progress-fill" id="kpiFulfillBar" style="width:0%"></div></div>
+    </div>
+    <div class="stat-card purple">
+      <span class="stat-label">Active &amp; Compliant Ratio</span>
+      <span class="stat-value" id="kpiActiveRatio">—</span>
+      <span class="kpi-sub" id="kpiActiveSub">active/total</span>
     </div>
   </div>
 
-  <!-- Charts -->
-  <div class="two-col" style="grid-template-columns: 1fr 1fr; margin-bottom: 2rem;">
-    <div class="card">
-      <h3>📦 Resource Distribution</h3>
-      <div style="position: relative; height: 300px;">
-        <canvas id="resourceChart"></canvas>
-      </div>
+  <!-- 5.3 VISUAL CHARTS -->
+  <div class="charts-grid">
+    <!-- Grouped Bar: Supply vs Demand by resource -->
+    <div class="card chart-card">
+      <h3>📊 Supply vs Demand by Resource</h3>
+      <div class="chart-container"><canvas id="supplyDemandChart"></canvas></div>
     </div>
-    <div class="card">
-      <h3>👥 Supplier Status</h3>
-      <div style="position: relative; height: 300px;">
-        <canvas id="statusChart"></canvas>
-      </div>
+
+    <!-- Dual-Line: trend -->
+    <div class="card chart-card">
+      <h3>📈 Supply vs Demand Trend</h3>
+      <div class="chart-container"><canvas id="trendChart"></canvas></div>
+    </div>
+
+    <!-- Stacked Bar: event-wise distribution -->
+    <div class="card chart-card">
+      <h3>🗂️ Event-wise Resource Distribution</h3>
+      <div class="chart-container"><canvas id="eventStackChart"></canvas></div>
+    </div>
+
+    <!-- Donut: supplier compliance / activity -->
+    <div class="card chart-card">
+      <h3>👥 Supplier Compliance &amp; Activity</h3>
+      <div class="chart-container"><canvas id="complianceDonutChart"></canvas></div>
     </div>
   </div>
 
-  <!-- Data Table -->
-  <div class="card">
+  <!-- Horizontal Progress Bars: fulfillment by event / resource -->
+  <div class="card" style="margin-top:1.5rem;">
+    <div class="builder-header" style="margin-bottom:1rem;">
+      <h3>🎯 Demand Fulfillment Progress</h3>
+      <span class="badge" style="background: rgba(16,185,129,0.15); color:#6ee7b7;">Live</span>
+    </div>
+    <div id="fulfillmentBars" class="fulfillment-list">
+      <p class="muted">Loading…</p>
+    </div>
+  </div>
+
+  <!-- 5.4 DATA TABLE -->
+  <div class="card" style="margin-top:1.5rem;">
     <div class="builder-header">
-      <h3>📋 All Registered Suppliers</h3>
+      <h3>📋 Filtered Supplier &amp; Resource Data</h3>
       <div style="display: flex; gap: 1rem;">
         <button id="refreshStatsBtn" class="btn btn-ghost btn-sm">🔄 Refresh Data</button>
         <button id="exportExcelBtn" class="btn btn-gradient btn-sm">📥 Export to Excel</button>
       </div>
     </div>
-    
-    <table class="data-table" style="width: 100%; text-align: left; border-collapse: collapse; margin-top: 1rem;">
-      <thead>
-        <tr style="border-bottom: 2px solid var(--border-strong);">
-          <th style="padding: 12px;">#</th>
-          <th style="padding: 12px;">Wallet Address</th>
-          <th style="padding: 12px;">Verified</th>
-          <th style="padding: 12px;">Active</th>
-          <th style="padding: 12px;">Registered At</th>
-          <th style="padding: 12px;">Resources</th>
-        </tr>
-      </thead>
-      <tbody id="allSuppliersBody">
-        <tr><td colspan="6" style="text-align: center; padding: 2rem;">Click Refresh to load data</td></tr>
-      </tbody>
-    </table>
+
+    <div class="table-responsive">
+      <table class="data-table" style="width: 100%; border-collapse: collapse; margin-top: 1rem;">
+        <thead>
+          <tr>
+            <th>#</th>
+            <th>Wallet</th>
+            <th>Status</th>
+            <th>Compliant</th>
+            <th>Water</th>
+            <th>Clothing</th>
+            <th>Medicine</th>
+            <th>Food</th>
+            <th>Total Supply</th>
+          </tr>
+        </thead>
+        <tbody id="allSuppliersBody">
+          <tr><td colspan="9" style="text-align: center; padding: 2rem;">Click Refresh to load data</td></tr>
+        </tbody>
+      </table>
+    </div>
   </div>
 </section>
 

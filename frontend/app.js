@@ -18,6 +18,10 @@ let updQueue = [];
 let resourceChartInstance = null;
 let statusChartInstance = null;
 let suppliersByResourceChartInstance = null;
+let supplyDemandChartInstance = null;
+let trendChartInstance = null;
+let eventStackChartInstance = null;
+let complianceDonutChartInstance = null;
 
 // ============================================================
 // HELPERS
@@ -262,14 +266,28 @@ document.getElementById("checkComplianceBtn")?.addEventListener("click", async (
   try {
     const addr = document.getElementById("complianceAddress").value.trim();
     if (!ethers.isAddress(addr)) throw new Error("Invalid address format");
+    
     setStatus("complianceResult", "⏳ Checking...", "info");
 
-    const info = await contract.getSupplier(addr);
-    if (info.wallet === ZERO_ADDRESS) return setStatus("complianceResult", "❌ Not a registered supplier.", "err");
+    let info;
+    try {
+      info = await contract.getSupplier(addr);
+    } catch (decodeError) {
+      // If decoding fails, it means the address doesn't exist in the mapping
+      return setStatus("complianceResult", "❌ Supplier not found. This address has not registered yet.", "err");
+    }
+
+    // Check if the wallet address returned is the zero address
+    if (info.wallet === ZERO_ADDRESS || !info.verified) {
+      return setStatus("complianceResult", "❌ Not a registered supplier.", "err");
+    }
     
     const compliant = await contract.isCompliant(addr);
     setStatus("complianceResult", compliant ? "✅ Supplier is COMPLIANT" : "❌ Supplier is NON-COMPLIANT", compliant ? "ok" : "err");
-  } catch (err) { setStatus("complianceResult", "❌ " + getErrorMessage(err), "err"); }
+    
+  } catch (err) { 
+    setStatus("complianceResult", "❌ " + getErrorMessage(err), "err"); 
+  }
 });
 
 document.getElementById("deactivateBtn")?.addEventListener("click", async () => {
@@ -277,8 +295,24 @@ document.getElementById("deactivateBtn")?.addEventListener("click", async () => 
   try {
     const addr = document.getElementById("deactivateAddress").value.trim();
     if (!ethers.isAddress(addr)) throw new Error("Invalid address");
+    
     setStatus("deactivateStatus", "⏳ Processing...", "info");
     
+    let info;
+    try {
+      info = await contract.getSupplier(addr);
+    } catch (decodeError) {
+      return setStatus("deactivateStatus", "❌ Supplier not found. This address has not registered yet.", "err");
+    }
+
+    if (info.wallet === ZERO_ADDRESS || !info.verified) {
+      return setStatus("deactivateStatus", "❌ Not a registered supplier.", "err");
+    }
+
+    if (!info.active) {
+      return setStatus("deactivateStatus", "⚠️ Supplier is already inactive.", "info");
+    }
+
     const compliant = await contract.isCompliant(addr);
     if (compliant) throw new Error("Supplier is compliant! Cannot deactivate.");
 
@@ -476,88 +510,430 @@ document.getElementById("refreshMyResourcesBtn")?.addEventListener("click", () =
 // ============================================================
 // STATISTICS & CHARTS
 // ============================================================
+// ============================================================
+// STATISTICS & CHARTS — INTERACTIVE DASHBOARD (5.x spec)
+// ============================================================
+const EVENT_MAP = {
+  flood2026: "Flood Relief 2026",
+  earthquake: "Earthquake Response",
+  routine: "Routine Operations",
+  all: "All Events",
+};
+
+const RESOURCE_LABELS = ["Water 💧", "Clothing 👕", "Medicine 💊", "Food 🍞"];
+const RESOURCE_COLORS = ["#38bdf8", "#ec4899", "#10b981", "#f59e0b"];
+
+// Synthetic demand model (per-event, per-resource). Used since the contract
+// does not store demand. Deterministic so it looks realistic + filterable.
+function computeDemandModel(events, resources) {
+  // Base demand table (units). Adjust here if you want different demo numbers.
+  const base = {
+    flood2026:  [120, 80, 60, 100],
+    earthquake: [90, 40, 110, 70],
+    routine:    [50, 30, 25, 40],
+  };
+  const activeEvents =
+    events === "all" ? Object.keys(base) : [events];
+  const activeResources =
+    resources === "all" ? [0,1,2,3] : [Number(resources)];
+
+  const perResource = [0,0,0,0];
+  const perEvent = { flood2026:[0,0,0,0], earthquake:[0,0,0,0], routine:[0,0,0,0] };
+
+  activeEvents.forEach((ev) => {
+    activeResources.forEach((ri) => {
+      perResource[ri] += base[ev][ri];
+      perEvent[ev][ri] = base[ev][ri];
+    });
+  });
+
+  return { perResource, perEvent, activeEvents, activeResources };
+}
+
+function isInRange(ts, from, to) {
+  if (!ts) return false;
+  const t = Number(ts) * 1000;
+  if (from && t < from.getTime()) return false;
+  if (to && t > to.getTime() + 86400000) return false;
+  return true;
+}
+
+function readFilters() {
+  const gran = document.getElementById("fGranularity")?.value || "monthly";
+  const fromVal = document.getElementById("fFromDate")?.value;
+  const toVal = document.getElementById("fToDate")?.value;
+  return {
+    gran,
+    from: fromVal ? new Date(fromVal) : null,
+    to: toVal ? new Date(toVal) : null,
+    event: document.getElementById("fEvent")?.value || "all",
+    resource: document.getElementById("fResource")?.value || "all",
+    supplierStatus: document.getElementById("fSupplierStatus")?.value || "all",
+  };
+}
+
 async function refreshStats() {
   if (!contract) return;
 
-  if (typeof Chart !== 'undefined') {
-    Chart.defaults.color = '#94a3b8';
+  if (typeof Chart !== "undefined") {
+    Chart.defaults.color = "#94a3b8";
     Chart.defaults.font.family = "'Inter', system-ui, sans-serif";
+    Chart.defaults.plugins.tooltip.backgroundColor = "rgba(15, 15, 30, 0.95)";
+    Chart.defaults.plugins.tooltip.padding = 12;
+    Chart.defaults.plugins.tooltip.cornerRadius = 8;
+    Chart.defaults.plugins.legend.labels.color = "#94a3b8";
   }
 
+  const f = readFilters();
+
   try {
-    const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-    
-    const [w, c, m, f] = await Promise.all([
-      contract.getAggregateQuantity(0), contract.getAggregateQuantity(1), 
-      contract.getAggregateQuantity(2), contract.getAggregateQuantity(3),
-    ]);
-    
-    set("aggWater", w.toString()); set("aggClothing", c.toString()); 
-    set("aggMedicine", m.toString()); set("aggFood", f.toString());
-
-    const active = await contract.getActiveSuppliers();
-    const inactive = await contract.getInactiveSuppliers();
-    
-    const [waterSups, clothingSups, medSups, foodSups] = await Promise.all([
-      contract.getSuppliersByResource(0), contract.getSuppliersByResource(1), 
-      contract.getSuppliersByResource(2), contract.getSuppliersByResource(3),
-    ]);
-
-    const ctxResource = document.getElementById('resourceChart');
-    if (ctxResource && typeof Chart !== 'undefined') {
-      if (resourceChartInstance) resourceChartInstance.destroy();
-      resourceChartInstance = new Chart(ctxResource, {
-        type: 'doughnut',
-        data: {
-          labels: ['Water 💧', 'Clothing 👕', 'Medicine 💊', 'Food 🍞'],
-          datasets: [{ data: [w, c, m, f], backgroundColor: ['#38bdf8', '#ec4899', '#10b981', '#f59e0b'], borderWidth: 0, hoverOffset: 10 }]
-        },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' }, tooltip: { backgroundColor: 'rgba(15, 15, 30, 0.9)' } }, cutout: '70%' }
-      });
-    }
-
-    const ctxStatus = document.getElementById('statusChart');
-    if (ctxStatus && typeof Chart !== 'undefined') {
-      if (statusChartInstance) statusChartInstance.destroy();
-      statusChartInstance = new Chart(ctxStatus, {
-        type: 'pie',
-        data: {
-          labels: ['Active', 'Inactive'],
-          datasets: [{ data: [active, inactive], backgroundColor: ['#10b981', '#ef4444'], borderWidth: 0, hoverOffset: 10 }]
-        },
-        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right' }, tooltip: { backgroundColor: 'rgba(15, 15, 30, 0.9)' } } }
-      });
-    }
-
-    const ctxBar = document.getElementById('suppliersByResourceChart');
-    if (ctxBar && typeof Chart !== 'undefined') {
-      if (suppliersByResourceChartInstance) suppliersByResourceChartInstance.destroy();
-      suppliersByResourceChartInstance = new Chart(ctxBar, {
-        type: 'bar',
-        data: {
-          labels: ['Water', 'Clothing', 'Medicine', 'Food'],
-          datasets: [{ label: 'Number of Suppliers', data: [waterSups, clothingSups, medSups, foodSups], backgroundColor: ['rgba(56, 189, 248, 0.8)', 'rgba(236, 72, 153, 0.8)', 'rgba(16, 185, 129, 0.8)', 'rgba(245, 158, 11, 0.8)'], borderRadius: 6, borderSkipped: false }]
-        },
-        options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: 1 }, grid: { color: 'rgba(139, 92, 246, 0.1)' } }, x: { grid: { display: false } } }, plugins: { legend: { display: false } } }
-      });
-    }
-
+    // ---------- Fetch all suppliers & their resources ----------
     const all = await contract.getAllSupplierAddresses();
-    let rows = "";
-    for (let i = 0; i < all.length; i++) {
-      const s = await contract.getSupplier(all[i]);
-      rows += `<tr><td>${i + 1}</td><td class="mono" style="font-size: 0.8rem;">${shortAddr(s.wallet)}</td><td>${s.verified ? "✅" : "❌"}</td><td>${s.active ? "✅" : "❌"}</td><td>${fmtTime(s.registeredAt)}</td><td>${s.resourceCount.toString()}</td></tr>`;
-    }
-    const body = document.getElementById("allSuppliersBody");
-    if (body) body.innerHTML = rows || `<tr><td colspan="6" class="muted" style="text-align: center;">No suppliers found</td></tr>`;
+    const suppliers = [];
+    const aggregatePerResource = [0n, 0n, 0n, 0n];
+    let totalActive = 0;
+    let totalInactive = 0;
+    let totalCompliant = 0;
+    let totalActiveCompliant = 0;
 
-  } catch (e) { console.error("Error refreshing stats:", e); }
+    for (let i = 0; i < all.length; i++) {
+      const addr = all[i];
+      const s = await contract.getSupplier(addr);
+
+      // Skip suppliers outside date range (based on registeredAt)
+      if ((f.from || f.to) && !isInRange(s.registeredAt, f.from, f.to)) continue;
+
+      // Supplier-status filter
+      let compliant = false;
+      try { compliant = await contract.isCompliant(addr); } catch (e) {}
+      if (f.supplierStatus === "active" && !s.active) continue;
+      if (f.supplierStatus === "inactive" && s.active) continue;
+      if (f.supplierStatus === "compliant" && !compliant) continue;
+      if (f.supplierStatus === "non-compliant" && compliant) continue;
+
+      const qty = [0n, 0n, 0n, 0n];
+      for (let r = 0; r < 4; r++) {
+        try {
+          const rr = await contract.getSupplierResource(addr, r);
+          if (rr.registered) qty[r] = rr.quantity;
+        } catch (e) {}
+      }
+
+      // Apply resource filter to aggregate (only count selected resource)
+      for (let r = 0; r < 4; r++) {
+        if (f.resource !== "all" && Number(f.resource) !== r) continue;
+        aggregatePerResource[r] += qty[r];
+      }
+
+      if (s.active) totalActive++; else totalInactive++;
+      if (compliant) totalCompliant++;
+      if (s.active && compliant) totalActiveCompliant++;
+
+      suppliers.push({
+        addr,
+        active: s.active,
+        compliant,
+        verified: s.verified,
+        registeredAt: s.registeredAt,
+        qty,
+      });
+    }
+
+    // ---------- 5.2 KPI calculations ----------
+    const totalSupply = aggregatePerResource.reduce((a, b) => a + Number(b), 0);
+    const demandModel = computeDemandModel(f.event, f.resource);
+    const totalDemand = demandModel.perResource.reduce((a, b) => a + b, 0);
+    const net = totalSupply - totalDemand;
+    const fulfillmentRate = totalDemand > 0
+      ? Math.min(100, (totalSupply / totalDemand) * 100)
+      : 0;
+    const activeRatio = all.length > 0
+      ? ((totalActiveCompliant / all.length) * 100)
+      : 0;
+
+    const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+
+    setTxt("kpiSupply", totalSupply.toLocaleString());
+    setTxt("kpiSupplySub", `${totalActive} active suppliers`);
+    setTxt("kpiDemand", totalDemand.toLocaleString());
+
+    const netEl = document.getElementById("kpiNet");
+    if (netEl) {
+      netEl.textContent = (net >= 0 ? "+" : "") + net.toLocaleString();
+      netEl.classList.remove("positive", "negative");
+      netEl.classList.add(net >= 0 ? "positive" : "negative");
+    }
+    setTxt("kpiNetSub", net >= 0 ? "surplus ✅" : "deficit ⚠️");
+    setTxt("kpiFulfill", fulfillmentRate.toFixed(1) + "%");
+    const bar = document.getElementById("kpiFulfillBar");
+    if (bar) bar.style.width = Math.min(100, fulfillmentRate) + "%";
+    setTxt("kpiActiveRatio", activeRatio.toFixed(1) + "%");
+    setTxt("kpiActiveSub", `${totalActiveCompliant}/${all.length} active+compliant`);
+
+    // ---------- 5.3 Chart 1: Grouped bar supply vs demand ----------
+    const sdCtx = document.getElementById("supplyDemandChart");
+    if (sdCtx && typeof Chart !== "undefined") {
+      if (supplyDemandChartInstance) supplyDemandChartInstance.destroy();
+      supplyDemandChartInstance = new Chart(sdCtx, {
+        type: "bar",
+        data: {
+          labels: RESOURCE_LABELS,
+          datasets: [
+            {
+              label: "Supply",
+              data: aggregatePerResource.map(Number),
+              backgroundColor: "#10b981",
+              borderRadius: 6,
+            },
+            {
+              label: "Demand",
+              data: demandModel.perResource,
+              backgroundColor: "#ef4444",
+              borderRadius: 6,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: "top" },
+            tooltip: { mode: "index", intersect: false },
+          },
+          scales: {
+            y: { beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } },
+            x: { grid: { display: false } },
+          },
+        },
+      });
+    }
+
+    // ---------- 5.3 Chart 2: Dual-line trend ----------
+    const trendCtx = document.getElementById("trendChart");
+    if (trendCtx && typeof Chart !== "undefined") {
+      const { labels, supplySeries, demandSeries } = buildTrendSeries(
+        f.gran, f.from, f.to, totalSupply, totalDemand
+      );
+      if (trendChartInstance) trendChartInstance.destroy();
+      trendChartInstance = new Chart(trendCtx, {
+        type: "line",
+        data: {
+          labels,
+          datasets: [
+            {
+              label: "Supply",
+              data: supplySeries,
+              borderColor: "#10b981",
+              backgroundColor: "rgba(16,185,129,0.15)",
+              fill: true,
+              tension: 0.35,
+              pointRadius: 3,
+              pointHoverRadius: 6,
+            },
+            {
+              label: "Demand",
+              data: demandSeries,
+              borderColor: "#ef4444",
+              backgroundColor: "rgba(239,68,68,0.12)",
+              fill: true,
+              tension: 0.35,
+              pointRadius: 3,
+              pointHoverRadius: 6,
+            },
+          ],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          interaction: { mode: "index", intersect: false },
+          plugins: { legend: { position: "top" } },
+          scales: {
+            y: { beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } },
+            x: { grid: { display: false } },
+          },
+        },
+      });
+    }
+
+    // ---------- 5.3 Chart 3: Stacked event-wise distribution ----------
+    const esCtx = document.getElementById("eventStackChart");
+    if (esCtx && typeof Chart !== "undefined") {
+      const events = demandModel.activeEvents;
+      const eventDatasets = RESOURCE_LABELS.map((label, ri) => ({
+        label,
+        data: events.map((ev) => demandModel.perEvent[ev][ri]),
+        backgroundColor: RESOURCE_COLORS[ri],
+        borderRadius: 4,
+        stack: "s1",
+      }));
+      if (eventStackChartInstance) eventStackChartInstance.destroy();
+      eventStackChartInstance = new Chart(esCtx, {
+        type: "bar",
+        data: {
+          labels: events.map((e) => EVENT_MAP[e]),
+          datasets: eventDatasets,
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { position: "top" } },
+          scales: {
+            x: { stacked: true, grid: { display: false } },
+            y: { stacked: true, beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } },
+          },
+        },
+      });
+    }
+
+    // ---------- 5.3 Chart 4: Donut compliance & activity ----------
+    const donutCtx = document.getElementById("complianceDonutChart");
+    if (donutCtx && typeof Chart !== "undefined") {
+      const both = suppliers.filter((s) => s.active && s.compliant).length;
+      const activeOnly = suppliers.filter((s) => s.active && !s.compliant).length;
+      const inactiveCompliant = suppliers.filter((s) => !s.active && s.compliant).length;
+      const inactiveNon = suppliers.filter((s) => !s.active && !s.compliant).length;
+      if (complianceDonutChartInstance) complianceDonutChartInstance.destroy();
+      complianceDonutChartInstance = new Chart(donutCtx, {
+        type: "doughnut",
+        data: {
+          labels: ["Active & Compliant", "Active & Non-Compliant", "Inactive & Compliant", "Inactive & Non-Compliant"],
+          datasets: [{
+            data: [both, activeOnly, inactiveCompliant, inactiveNon],
+            backgroundColor: ["#10b981", "#f59e0b", "#38bdf8", "#ef4444"],
+            borderWidth: 0,
+            hoverOffset: 10,
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: "65%",
+          plugins: { legend: { position: "right" } },
+        },
+      });
+    }
+
+    // ---------- 5.3 Horizontal progress bars (fulfillment) ----------
+    const fb = document.getElementById("fulfillmentBars");
+    if (fb) {
+      const rows = [];
+      // By event
+      demandModel.activeEvents.forEach((ev) => {
+        const dem = demandModel.perEvent[ev].reduce((a, b) => a + b, 0);
+        // approximate allocation proportionally from supply
+        const alloc = totalDemand > 0 ? Math.min(dem, (totalSupply * (dem / totalDemand))) : 0;
+        const pct = dem > 0 ? Math.min(100, (alloc / dem) * 100) : 0;
+        rows.push(renderBar(EVENT_MAP[ev], alloc, dem, pct));
+      });
+      // By resource
+      demandModel.activeResources.forEach((ri) => {
+        const dem = demandModel.perResource[ri];
+        const sup = Number(aggregatePerResource[ri]);
+        const pct = dem > 0 ? Math.min(100, (sup / dem) * 100) : 0;
+        rows.push(renderBar(RESOURCE_LABELS[ri], sup, dem, pct));
+      });
+      fb.innerHTML = rows.join("") || `<p class="muted">No data</p>`;
+    }
+
+    // ---------- 5.4 Data table ----------
+    let rows = "";
+    suppliers.forEach((s, i) => {
+      const totalSup = s.qty.reduce((a, b) => a + Number(b), 0);
+      const statusPill = s.active
+        ? `<span class="pill ok">Active</span>`
+        : `<span class="pill bad">Inactive</span>`;
+      const compPill = s.compliant
+        ? `<span class="pill ok">✅</span>`
+        : `<span class="pill bad">❌</span>`;
+      rows += `<tr>
+        <td>${i + 1}</td>
+        <td class="mono" style="font-size:0.78rem;">${shortAddr(s.addr)}</td>
+        <td>${statusPill}</td>
+        <td>${compPill}</td>
+        <td>${Number(s.qty[0])}</td>
+        <td>${Number(s.qty[1])}</td>
+        <td>${Number(s.qty[2])}</td>
+        <td>${Number(s.qty[3])}</td>
+        <td><b>${totalSup}</b></td>
+      </tr>`;
+    });
+    const body = document.getElementById("allSuppliersBody");
+    if (body) body.innerHTML = rows || `<tr><td colspan="9" style="text-align:center;" class="muted">No suppliers match filters</td></tr>`;
+
+    // also update the legacy aggregate KPI ids if present
+    setTxt("aggWater", aggregatePerResource[0].toString());
+    setTxt("aggClothing", aggregatePerResource[1].toString());
+    setTxt("aggMedicine", aggregatePerResource[2].toString());
+    setTxt("aggFood", aggregatePerResource[3].toString());
+
+  } catch (e) {
+    console.error("Error refreshing stats:", e);
+  }
 }
 
-document.getElementById("refreshStatsBtn")?.addEventListener("click", () => { 
-  if (!ensureConnected()) return; 
-  refreshStats(); 
-  toast("info", "Stats refreshed"); 
+function renderBar(label, got, total, pct) {
+  const cls = pct >= 80 ? "good" : pct >= 50 ? "warn" : "bad";
+  return `
+    <div class="fulfillment-item">
+      <div class="fh"><span>${label}</span><b>${pct.toFixed(1)}% (${Math.round(got)}/${total})</b></div>
+      <div class="fulfillment-track"><div class="fulfillment-fill ${cls}" style="width:${Math.min(100,pct)}%"></div></div>
+    </div>`;
+}
+
+function buildTrendSeries(gran, from, to, totalSupply, totalDemand) {
+  const now = new Date();
+  const labels = [];
+  const supplySeries = [];
+  const demandSeries = [];
+
+  // Build synthetic daily/monthly/yearly distribution that sums roughly to total
+  let points = 12;
+  if (gran === "daily") points = 14;
+  if (gran === "yearly") points = 5;
+
+  for (let i = points - 1; i >= 0; i--) {
+    const d = new Date(now);
+    if (gran === "daily") d.setDate(now.getDate() - i);
+    if (gran === "monthly") d.setMonth(now.getMonth() - i);
+    if (gran === "yearly") d.setFullYear(now.getFullYear() - i);
+
+    if (gran === "daily") labels.push(d.toLocaleDateString(undefined, { month: "short", day: "numeric" }));
+    if (gran === "monthly") labels.push(d.toLocaleDateString(undefined, { month: "short", year: "2-digit" }));
+    if (gran === "yearly") labels.push(String(d.getFullYear()));
+
+    // Smooth random-ish curve
+    const baseS = totalSupply / points;
+    const baseD = totalDemand / points;
+    const wobble = 0.7 + 0.6 * Math.sin(i * 1.1 + 0.5);
+    supplySeries.push(Math.round(baseS * wobble));
+    demandSeries.push(Math.round(baseD * (1.4 - wobble * 0.6)));
+  }
+  return { labels, supplySeries, demandSeries };
+}
+
+// ---- wire filter buttons (once DOM ready) ----
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("applyFiltersBtn")?.addEventListener("click", () => {
+    if (!ensureConnected()) return;
+    refreshStats();
+    toast("info", "Filters applied");
+  });
+  document.getElementById("resetFiltersBtn")?.addEventListener("click", () => {
+    ["fFromDate", "fToDate"].forEach((id) => { const el = document.getElementById(id); if (el) el.value = ""; });
+    ["fGranularity", "fEvent", "fResource", "fSupplierStatus"].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.selectedIndex = 0;
+    });
+    if (contract) refreshStats();
+    toast("info", "Filters reset");
+  });
+
+  // Live-update on select change (optional convenience)
+  ["fGranularity", "fEvent", "fResource", "fSupplierStatus"].forEach((id) => {
+    document.getElementById(id)?.addEventListener("change", () => {
+      if (contract) refreshStats();
+    });
+  });
 });
 
 // ============================================================
@@ -694,9 +1070,59 @@ document.getElementById("downloadLogBtn")?.addEventListener("click", () => {
 // ============================================================
 // INITIALIZATION & TIME SIMULATION
 // ============================================================
+// ============================================================
+// INITIALIZATION, ROLE MANAGEMENT & TIME SIMULATION
+// ============================================================
 document.addEventListener("DOMContentLoaded", () => {
   console.log("🚀 DApp initialized successfully");
   
+  // --- ROLE MANAGEMENT LOGIC ---
+  const role = localStorage.getItem("dapp_role");
+  
+  if (role) {
+    // Change the Connect Wallet button area to also show a Logout button
+    const walletDiv = document.querySelector(".wallet");
+    const logoutBtn = document.createElement("button");
+    logoutBtn.className = "btn btn-ghost";
+    logoutBtn.style.marginLeft = "1rem";
+    logoutBtn.textContent = "Logout";
+    logoutBtn.onclick = () => {
+      localStorage.removeItem("dapp_role");
+      window.location.href = "login.html";
+    };
+    walletDiv.appendChild(logoutBtn);
+
+    // Show role badge
+    const roleBadge = document.createElement("span");
+    roleBadge.className = "badge";
+    roleBadge.style.marginLeft = "1rem";
+    roleBadge.style.background = role === 'admin' ? 'rgba(139, 92, 246, 0.2)' : 'rgba(6, 182, 212, 0.2)';
+    roleBadge.style.color = role === 'admin' ? '#c4b5fd' : '#67e8f9';
+    roleBadge.textContent = role === 'admin' ? 'Admin Mode' : 'User Mode';
+    document.querySelector(".brand").appendChild(roleBadge);
+
+    // Apply restrictions for 'user' role
+    if (role === "user") {
+      const restrictedTabs = ["register", "compliance", "penalty"];
+      restrictedTabs.forEach(tabName => {
+        // Hide the tab button
+        const tabBtn = document.querySelector(`.tab[data-tab="${tabName}"]`);
+        if (tabBtn) tabBtn.style.display = "none";
+
+        // Hide the panel just in case
+        const panel = document.getElementById(tabName);
+        if (panel) panel.style.display = "none";
+      });
+      
+      // If the user was on a restricted tab, kick them to dashboard
+      const activeTab = document.querySelector(".tab.active");
+      if (activeTab && restrictedTabs.includes(activeTab.dataset.tab)) {
+        switchTab("dashboard");
+      }
+    }
+  }
+  // -----------------------------
+
   // Initialize UI components
   renderRegQueue(); 
   renderUpdQueue(); 
