@@ -3,10 +3,17 @@
 // ============================================================
 let provider, signer, contract, userAddress;
 const RESOURCE_META = {
-  0: { name: "Water",    icon: "💧", color: "#38bdf8", cls: "water" },
-  1: { name: "Clothing", icon: "👕", color: "#ec4899", cls: "clothing" },
-  2: { name: "Medicine", icon: "💊", color: "#10b981", cls: "medicine" },
-  3: { name: "Food",     icon: "🍞", color: "#f59e0b", cls: "food" },
+  // PRIMARY RESOURCES
+  0: { name: "Water",    icon: "💧", color: "#38bdf8", cls: "water",    category: "primary",   unit: "Gallons", cost: 0.02 },
+  1: { name: "Clothing", icon: "👕", color: "#ec4899", cls: "clothing", category: "primary",   unit: "Pieces",  cost: 0.10 },
+  2: { name: "Medicine", icon: "💊", color: "#10b981", cls: "medicine", category: "primary",   unit: "Kits",    cost: 0.50 },
+  3: { name: "Food",     icon: "🍞", color: "#f59e0b", cls: "food",     category: "primary",   unit: "Packs",   cost: 0.05 },
+  
+  // SECONDARY RESOURCES
+  4: { name: "Shelter",  icon: "🏠", color: "#8b5cf6", cls: "shelter",  category: "secondary", unit: "Tents",   cost: 2.50 },
+  5: { name: "Fuel",     icon: "⛽", color: "#ef4444", cls: "fuel",     category: "secondary", unit: "Liters",  cost: 0.08 },
+  6: { name: "Hygiene",  icon: "🧼", color: "#06b6d4", cls: "hygiene",  category: "secondary", unit: "Kits",    cost: 0.30 },
+  7: { name: "Power",    icon: "🔋", color: "#facc15", cls: "power",    category: "secondary", unit: "Generators", cost: 5.00 }
 };
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
@@ -104,6 +111,56 @@ document.getElementById("connectBtn")?.addEventListener("click", async () => {
 // ============================================================
 // REGISTER SUPPLIER
 // ============================================================
+// ============================================================
+// MFA REGISTRATION WIZARD
+// ============================================================
+let generatedSupplierId = "";
+let generatedPasskey = "";
+let correctMfaCode = "";
+
+document.getElementById("regNext1Btn")?.addEventListener("click", () => {
+  const org = document.getElementById("regOrgName").value.trim();
+  const email = document.getElementById("regEmail").value.trim();
+  
+  if (!org || !email.includes("@")) {
+    return toast("error", "Please enter a valid organization name and email.");
+  }
+
+  const randHex = Math.random().toString(16).slice(2, 6).toUpperCase();
+  generatedSupplierId = `SUP-${randHex}`;
+  generatedPasskey = `PK-${Math.floor(1000 + Math.random() * 9000)}`;
+  correctMfaCode = Math.floor(100000 + Math.random() * 900000).toString();
+
+  document.getElementById("displayRegId").textContent = generatedSupplierId;
+  document.getElementById("displayRegPass").textContent = generatedPasskey;
+  document.getElementById("mockMfaCode").textContent = correctMfaCode;
+  document.getElementById("regMfaInput").value = ""; 
+
+  localStorage.setItem(`supplier_${generatedSupplierId}`, JSON.stringify({ org, email, passkey: generatedPasskey }));
+
+  document.getElementById("regStep1").classList.add("hidden");
+  document.getElementById("regStep2").classList.remove("hidden");
+  toast("info", `MFA Code sent to ${email}`);
+});
+
+document.getElementById("regNext2Btn")?.addEventListener("click", () => {
+  const enteredCode = document.getElementById("regMfaInput").value.trim();
+  if (enteredCode !== correctMfaCode) {
+    return toast("error", "Invalid MFA Code. Please check and try again.");
+  }
+  document.getElementById("regStep2").classList.add("hidden");
+  document.getElementById("regStep3").classList.remove("hidden");
+});
+
+document.getElementById("regBack1Btn")?.addEventListener("click", () => {
+  document.getElementById("regStep2").classList.add("hidden");
+  document.getElementById("regStep1").classList.remove("hidden");
+});
+document.getElementById("regBack2Btn")?.addEventListener("click", () => {
+  document.getElementById("regStep3").classList.add("hidden");
+  document.getElementById("regStep2").classList.remove("hidden");
+});
+
 document.getElementById("registerBtn")?.addEventListener("click", async () => {
   if (!ensureConnected("registerStatus")) return;
   try {
@@ -112,18 +169,31 @@ document.getElementById("registerBtn")?.addEventListener("click", async () => {
     
     await logTransaction({
         title: "Register Supplier",
-        description: "Paid 100,000 wei registration fee",
+        description: `Registered as ${generatedSupplierId} (Fee: 100,000 wei)`,
         icon: "👤", color: "#8b5cf6",
         action: () => contract.registerSupplier({ value: fee })
     });
 
+    localStorage.setItem(`wallet_${userAddress}`, generatedSupplierId);
+
     setStatus("registerStatus", "✅ Registered successfully!", "ok");
+    
+    setTimeout(() => {
+      document.getElementById("regStep3").classList.add("hidden");
+      document.getElementById("regStep1").classList.remove("hidden");
+      document.getElementById("regOrgName").value = "";
+      document.getElementById("regEmail").value = "";
+    }, 3000);
+
     await refreshAll();
   } catch (err) { setStatus("registerStatus", "❌ " + getErrorMessage(err), "err"); }
 });
 
 // ============================================================
 // REGISTER RESOURCE (BATCH)
+// ============================================================
+// ============================================================
+// REGISTER RESOURCE (BATCH) - UPDATED
 // ============================================================
 function renderRegQueue() {
   const list = document.getElementById("queueList");
@@ -137,12 +207,24 @@ function renderRegQueue() {
     list.innerHTML = `<div class="queue-empty"><p>No resources added yet</p></div>`;
     return;
   }
+  
   list.innerHTML = regQueue.map((r, i) => {
     const m = RESOURCE_META[r.type];
-    return `<div class="queue-item" style="--item-color: ${m.color}"><span class="q-icon">${m.icon}</span><span class="q-name">${m.name}</span><input type="number" min="1" placeholder="Qty" value="${r.qty}" oninput="updateRegQty(${i}, this.value)" /><button class="q-remove" onclick="removeRegQueue(${i})">✕</button></div>`;
+    const totalCost = (Number(r.qty) * m.cost) || 0;
+    
+    return `
+    <div class="queue-item" style="--item-color: ${m.color}; flex-wrap: wrap;">
+      <span class="q-icon">${m.icon}</span>
+      <span class="q-name">${m.name} <small style="color: var(--text-dim);">(${m.unit})</small></span>
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <input type="number" min="1" placeholder="Qty" value="${r.qty}" oninput="updateRegQty(${i}, this.value)" style="width: 80px;" />
+        <span style="font-size: 0.8rem; color: #6ee7b7;">≈ $${totalCost.toFixed(2)}</span>
+      </div>
+      <button class="q-remove" onclick="removeRegQueue(${i})">✕</button>
+    </div>`;
   }).join("");
 }
-window.updateRegQty = (i, v) => { if (regQueue[i]) regQueue[i].qty = v; };
+window.updateRegQty = (i, v) => { if (regQueue[i]) { regQueue[i].qty = v; renderRegQueue(); } };
 window.removeRegQueue = (i) => { regQueue.splice(i, 1); renderRegQueue(); };
 
 document.querySelectorAll('.resource-tile[data-type]').forEach((tile) => {
@@ -204,12 +286,24 @@ function renderUpdQueue() {
     list.innerHTML = `<div class="queue-empty"><p>No updates queued</p></div>`;
     return;
   }
+  
   list.innerHTML = updQueue.map((r, i) => {
     const m = RESOURCE_META[r.type];
-    return `<div class="queue-item" style="--item-color: ${m.color}"><span class="q-icon">${m.icon}</span><span class="q-name">${m.name}</span><input type="number" min="1" placeholder="New qty" value="${r.qty}" oninput="updateUpdQty(${i}, this.value)" /><button class="q-remove" onclick="removeUpdQueue(${i})">✕</button></div>`;
+    const totalCost = (Number(r.qty) * m.cost) || 0;
+
+    return `
+    <div class="queue-item" style="--item-color: ${m.color}; flex-wrap: wrap;">
+      <span class="q-icon">${m.icon}</span>
+      <span class="q-name">${m.name} <small style="color: var(--text-dim);">(${m.unit})</small></span>
+      <div style="display: flex; align-items: center; gap: 0.5rem;">
+        <input type="number" min="1" placeholder="New Qty" value="${r.qty}" oninput="updateUpdQty(${i}, this.value)" style="width: 80px;" />
+        <span style="font-size: 0.8rem; color: #6ee7b7;">≈ $${totalCost.toFixed(2)}</span>
+      </div>
+      <button class="q-remove" onclick="removeUpdQueue(${i})">✕</button>
+    </div>`;
   }).join("");
 }
-window.updateUpdQty = (i, v) => { if (updQueue[i]) updQueue[i].qty = v; };
+window.updateUpdQty = (i, v) => { if (updQueue[i]) { updQueue[i].qty = v; renderUpdQueue(); } };
 window.removeUpdQueue = (i) => { updQueue.splice(i, 1); renderUpdQueue(); };
 
 document.querySelectorAll('.resource-tile[data-update]').forEach((tile) => {
@@ -414,7 +508,9 @@ async function refreshDashboard() {
         let isComp = false;
         try { isComp = await contract.isCompliant(userAddress); } catch(e){}
 
+                // Look for this inside refreshDashboard():
         profileBox.innerHTML = `
+          <div class="profile-row"><span>Supplier ID</span><b class="mono" style="color:#c4b5fd;">${localStorage.getItem(`wallet_${userAddress}`) || "Not Linked"}</b></div>
           <div class="profile-row"><span>Account</span><b class="mono">${shortAddr(userAddress)}</b></div>
           <div class="profile-row"><span>Compliance Status</span><b style="color:${isComp ? '#6ee7b7' : '#fca5a5'}">${isComp ? '✅ Compliant' : '❌ Non-Compliant'}</b></div>
           <div class="profile-row"><span>Registered Resources</span><b>${s.resourceCount.toString()}</b></div>
@@ -471,10 +567,13 @@ async function renderMyResources() {
 
   try {
     const cards = [];
-    for (let i = 0; i < 4; i++) {
+    // Loop increased to 8 to support the new resources
+    for (let i = 0; i < 8; i++) {
       const r = await contract.getSupplierResource(userAddress, i);
       if (!r.registered) continue;
+      
       const m = RESOURCE_META[i];
+      if (!m) continue; 
       
       let compliant = false;
       let remaining = 0n;
@@ -490,11 +589,21 @@ async function renderMyResources() {
       const hoursLeft = compliant ? Math.floor(Number(remaining) / 3600) : 0;
       const badgeCls = compliant ? "ok" : "bad";
       const badgeTxt = compliant ? "✅ Compliant" : "⚠️ Overdue";
+      
+      const qtyNum = Number(r.quantity);
+      const totalValue = (qtyNum * m.cost).toFixed(2);
+      const categoryBadge = m.category === 'primary' 
+        ? `<span style="font-size:0.6rem; background:rgba(139,92,246,0.2); color:#c4b5fd; padding:2px 6px; border-radius:4px; margin-left:6px;">PRIMARY</span>`
+        : `<span style="font-size:0.6rem; background:rgba(239,68,68,0.2); color:#fca5a5; padding:2px 6px; border-radius:4px; margin-left:6px;">SECONDARY</span>`;
 
       cards.push(`
         <div class="resource-card ${m.cls}">
-          <div class="rc-header"><span class="rc-icon">${m.icon}</span><span class="rc-name">${m.name}</span></div>
-          <div class="rc-qty">${r.quantity.toString()}</div>
+          <div class="rc-header">
+            <span class="rc-icon">${m.icon}</span>
+            <span class="rc-name">${m.name} ${categoryBadge}</span>
+          </div>
+          <div class="rc-qty">${qtyNum.toLocaleString()} <span style="font-size:0.9rem; color:var(--text-muted); font-weight:normal;">${m.unit}</span></div>
+          <div style="font-size:0.8rem; color:#6ee7b7; margin-bottom:0.5rem;">Valued at: $${totalValue}</div>
           <div class="rc-meta"><span>${compliant ? hoursLeft + "h left" : "Overdue"}</span><span class="rc-badge ${badgeCls}">${badgeTxt}</span></div>
         </div>`);
     }
@@ -520,25 +629,25 @@ const EVENT_MAP = {
   all: "All Events",
 };
 
-const RESOURCE_LABELS = ["Water 💧", "Clothing 👕", "Medicine 💊", "Food 🍞"];
-const RESOURCE_COLORS = ["#38bdf8", "#ec4899", "#10b981", "#f59e0b"];
-
+const RESOURCE_LABELS = ["Water 💧", "Clothing 👕", "Medicine 💊", "Food 🍞", "Shelter 🏠", "Fuel ⛽", "Hygiene 🧼", "Power 🔋"];
+const RESOURCE_COLORS = ["#38bdf8", "#ec4899", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#06b6d4", "#facc15"];
 // Synthetic demand model (per-event, per-resource). Used since the contract
 // does not store demand. Deterministic so it looks realistic + filterable.
 function computeDemandModel(events, resources) {
-  // Base demand table (units). Adjust here if you want different demo numbers.
   const base = {
-    flood2026:  [120, 80, 60, 100],
-    earthquake: [90, 40, 110, 70],
-    routine:    [50, 30, 25, 40],
+    flood2026:  [120, 80, 60, 100, 40, 50, 30, 20],
+    earthquake: [90, 40, 110, 70, 80, 60, 50, 30],
+    routine:    [50, 30, 25, 40, 20, 30, 15, 10],
   };
-  const activeEvents =
-    events === "all" ? Object.keys(base) : [events];
-  const activeResources =
-    resources === "all" ? [0,1,2,3] : [Number(resources)];
+  const activeEvents = events === "all" ? Object.keys(base) : [events];
+  const activeResources = resources === "all" ? [0,1,2,3,4,5,6,7] : [Number(resources)];
 
-  const perResource = [0,0,0,0];
-  const perEvent = { flood2026:[0,0,0,0], earthquake:[0,0,0,0], routine:[0,0,0,0] };
+  const perResource = [0,0,0,0,0,0,0,0];
+  const perEvent = { 
+    flood2026: [0,0,0,0,0,0,0,0], 
+    earthquake: [0,0,0,0,0,0,0,0], 
+    routine: [0,0,0,0,0,0,0,0] 
+  };
 
   activeEvents.forEach((ev) => {
     activeResources.forEach((ri) => {
@@ -548,6 +657,7 @@ function computeDemandModel(events, resources) {
   });
 
   return { perResource, perEvent, activeEvents, activeResources };
+
 }
 
 function isInRange(ts, from, to) {
@@ -587,10 +697,12 @@ async function refreshStats() {
   const f = readFilters();
 
   try {
-    // ---------- Fetch all suppliers & their resources ----------
     const all = await contract.getAllSupplierAddresses();
     const suppliers = [];
-    const aggregatePerResource = [0n, 0n, 0n, 0n];
+    
+    // FIX 1: Expanded aggregate array to 8 items
+    const aggregatePerResource = [0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n];
+    
     let totalActive = 0;
     let totalInactive = 0;
     let totalCompliant = 0;
@@ -600,10 +712,8 @@ async function refreshStats() {
       const addr = all[i];
       const s = await contract.getSupplier(addr);
 
-      // Skip suppliers outside date range (based on registeredAt)
       if ((f.from || f.to) && !isInRange(s.registeredAt, f.from, f.to)) continue;
 
-      // Supplier-status filter
       let compliant = false;
       try { compliant = await contract.isCompliant(addr); } catch (e) {}
       if (f.supplierStatus === "active" && !s.active) continue;
@@ -611,16 +721,19 @@ async function refreshStats() {
       if (f.supplierStatus === "compliant" && !compliant) continue;
       if (f.supplierStatus === "non-compliant" && compliant) continue;
 
-      const qty = [0n, 0n, 0n, 0n];
-      for (let r = 0; r < 4; r++) {
+      // FIX 2: Expanded qty array to 8 items
+      const qty = [0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n];
+      
+      // FIX 3: Loop through 8 resources instead of 4
+      for (let r = 0; r < 8; r++) {
         try {
           const rr = await contract.getSupplierResource(addr, r);
           if (rr.registered) qty[r] = rr.quantity;
         } catch (e) {}
       }
 
-      // Apply resource filter to aggregate (only count selected resource)
-      for (let r = 0; r < 4; r++) {
+      // FIX 4: Loop through 8 resources here too
+      for (let r = 0; r < 8; r++) {
         if (f.resource !== "all" && Number(f.resource) !== r) continue;
         aggregatePerResource[r] += qty[r];
       }
@@ -630,26 +743,16 @@ async function refreshStats() {
       if (s.active && compliant) totalActiveCompliant++;
 
       suppliers.push({
-        addr,
-        active: s.active,
-        compliant,
-        verified: s.verified,
-        registeredAt: s.registeredAt,
-        qty,
+        addr, active: s.active, compliant, verified: s.verified, registeredAt: s.registeredAt, qty,
       });
     }
 
-    // ---------- 5.2 KPI calculations ----------
     const totalSupply = aggregatePerResource.reduce((a, b) => a + Number(b), 0);
     const demandModel = computeDemandModel(f.event, f.resource);
     const totalDemand = demandModel.perResource.reduce((a, b) => a + b, 0);
     const net = totalSupply - totalDemand;
-    const fulfillmentRate = totalDemand > 0
-      ? Math.min(100, (totalSupply / totalDemand) * 100)
-      : 0;
-    const activeRatio = all.length > 0
-      ? ((totalActiveCompliant / all.length) * 100)
-      : 0;
+    const fulfillmentRate = totalDemand > 0 ? Math.min(100, (totalSupply / totalDemand) * 100) : 0;
+    const activeRatio = all.length > 0 ? ((totalActiveCompliant / all.length) * 100) : 0;
 
     const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
 
@@ -670,7 +773,7 @@ async function refreshStats() {
     setTxt("kpiActiveRatio", activeRatio.toFixed(1) + "%");
     setTxt("kpiActiveSub", `${totalActiveCompliant}/${all.length} active+compliant`);
 
-    // ---------- 5.3 Chart 1: Grouped bar supply vs demand ----------
+    // Chart 1
     const sdCtx = document.getElementById("supplyDemandChart");
     if (sdCtx && typeof Chart !== "undefined") {
       if (supplyDemandChartInstance) supplyDemandChartInstance.destroy();
@@ -679,113 +782,48 @@ async function refreshStats() {
         data: {
           labels: RESOURCE_LABELS,
           datasets: [
-            {
-              label: "Supply",
-              data: aggregatePerResource.map(Number),
-              backgroundColor: "#10b981",
-              borderRadius: 6,
-            },
-            {
-              label: "Demand",
-              data: demandModel.perResource,
-              backgroundColor: "#ef4444",
-              borderRadius: 6,
-            },
+            { label: "Supply", data: aggregatePerResource.map(Number), backgroundColor: "#10b981", borderRadius: 6 },
+            { label: "Demand", data: demandModel.perResource, backgroundColor: "#ef4444", borderRadius: 6 },
           ],
         },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: {
-            legend: { position: "top" },
-            tooltip: { mode: "index", intersect: false },
-          },
-          scales: {
-            y: { beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } },
-            x: { grid: { display: false } },
-          },
-        },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "top" }, tooltip: { mode: "index", intersect: false } }, scales: { y: { beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } }, x: { grid: { display: false } } } },
       });
     }
 
-    // ---------- 5.3 Chart 2: Dual-line trend ----------
+    // Chart 2
     const trendCtx = document.getElementById("trendChart");
     if (trendCtx && typeof Chart !== "undefined") {
-      const { labels, supplySeries, demandSeries } = buildTrendSeries(
-        f.gran, f.from, f.to, totalSupply, totalDemand
-      );
+      const { labels, supplySeries, demandSeries } = buildTrendSeries(f.gran, f.from, f.to, totalSupply, totalDemand);
       if (trendChartInstance) trendChartInstance.destroy();
       trendChartInstance = new Chart(trendCtx, {
         type: "line",
         data: {
           labels,
           datasets: [
-            {
-              label: "Supply",
-              data: supplySeries,
-              borderColor: "#10b981",
-              backgroundColor: "rgba(16,185,129,0.15)",
-              fill: true,
-              tension: 0.35,
-              pointRadius: 3,
-              pointHoverRadius: 6,
-            },
-            {
-              label: "Demand",
-              data: demandSeries,
-              borderColor: "#ef4444",
-              backgroundColor: "rgba(239,68,68,0.12)",
-              fill: true,
-              tension: 0.35,
-              pointRadius: 3,
-              pointHoverRadius: 6,
-            },
+            { label: "Supply", data: supplySeries, borderColor: "#10b981", backgroundColor: "rgba(16,185,129,0.15)", fill: true, tension: 0.35, pointRadius: 3, pointHoverRadius: 6 },
+            { label: "Demand", data: demandSeries, borderColor: "#ef4444", backgroundColor: "rgba(239,68,68,0.12)", fill: true, tension: 0.35, pointRadius: 3, pointHoverRadius: 6 },
           ],
         },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          interaction: { mode: "index", intersect: false },
-          plugins: { legend: { position: "top" } },
-          scales: {
-            y: { beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } },
-            x: { grid: { display: false } },
-          },
-        },
+        options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false }, plugins: { legend: { position: "top" } }, scales: { y: { beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } }, x: { grid: { display: false } } } },
       });
     }
 
-    // ---------- 5.3 Chart 3: Stacked event-wise distribution ----------
+    // Chart 3
     const esCtx = document.getElementById("eventStackChart");
     if (esCtx && typeof Chart !== "undefined") {
       const events = demandModel.activeEvents;
       const eventDatasets = RESOURCE_LABELS.map((label, ri) => ({
-        label,
-        data: events.map((ev) => demandModel.perEvent[ev][ri]),
-        backgroundColor: RESOURCE_COLORS[ri],
-        borderRadius: 4,
-        stack: "s1",
+        label, data: events.map((ev) => demandModel.perEvent[ev][ri]), backgroundColor: RESOURCE_COLORS[ri], borderRadius: 4, stack: "s1",
       }));
       if (eventStackChartInstance) eventStackChartInstance.destroy();
       eventStackChartInstance = new Chart(esCtx, {
         type: "bar",
-        data: {
-          labels: events.map((e) => EVENT_MAP[e]),
-          datasets: eventDatasets,
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          plugins: { legend: { position: "top" } },
-          scales: {
-            x: { stacked: true, grid: { display: false } },
-            y: { stacked: true, beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } },
-          },
-        },
+        data: { labels: events.map((e) => EVENT_MAP[e]), datasets: eventDatasets },
+        options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: "top" } }, scales: { x: { stacked: true, grid: { display: false } }, y: { stacked: true, beginAtZero: true, grid: { color: "rgba(139,92,246,0.1)" } } } },
       });
     }
 
-    // ---------- 5.3 Chart 4: Donut compliance & activity ----------
+    // Chart 4
     const donutCtx = document.getElementById("complianceDonutChart");
     if (donutCtx && typeof Chart !== "undefined") {
       const both = suppliers.filter((s) => s.active && s.compliant).length;
@@ -797,35 +835,22 @@ async function refreshStats() {
         type: "doughnut",
         data: {
           labels: ["Active & Compliant", "Active & Non-Compliant", "Inactive & Compliant", "Inactive & Non-Compliant"],
-          datasets: [{
-            data: [both, activeOnly, inactiveCompliant, inactiveNon],
-            backgroundColor: ["#10b981", "#f59e0b", "#38bdf8", "#ef4444"],
-            borderWidth: 0,
-            hoverOffset: 10,
-          }],
+          datasets: [{ data: [both, activeOnly, inactiveCompliant, inactiveNon], backgroundColor: ["#10b981", "#f59e0b", "#38bdf8", "#ef4444"], borderWidth: 0, hoverOffset: 10 }],
         },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          cutout: "65%",
-          plugins: { legend: { position: "right" } },
-        },
+        options: { responsive: true, maintainAspectRatio: false, cutout: "65%", plugins: { legend: { position: "right" } } },
       });
     }
 
-    // ---------- 5.3 Horizontal progress bars (fulfillment) ----------
+    // Bars
     const fb = document.getElementById("fulfillmentBars");
     if (fb) {
       const rows = [];
-      // By event
       demandModel.activeEvents.forEach((ev) => {
         const dem = demandModel.perEvent[ev].reduce((a, b) => a + b, 0);
-        // approximate allocation proportionally from supply
         const alloc = totalDemand > 0 ? Math.min(dem, (totalSupply * (dem / totalDemand))) : 0;
         const pct = dem > 0 ? Math.min(100, (alloc / dem) * 100) : 0;
         rows.push(renderBar(EVENT_MAP[ev], alloc, dem, pct));
       });
-      // By resource
       demandModel.activeResources.forEach((ri) => {
         const dem = demandModel.perResource[ri];
         const sup = Number(aggregatePerResource[ri]);
@@ -835,16 +860,13 @@ async function refreshStats() {
       fb.innerHTML = rows.join("") || `<p class="muted">No data</p>`;
     }
 
-    // ---------- 5.4 Data table ----------
+    // Table
     let rows = "";
     suppliers.forEach((s, i) => {
       const totalSup = s.qty.reduce((a, b) => a + Number(b), 0);
-      const statusPill = s.active
-        ? `<span class="pill ok">Active</span>`
-        : `<span class="pill bad">Inactive</span>`;
-      const compPill = s.compliant
-        ? `<span class="pill ok">✅</span>`
-        : `<span class="pill bad">❌</span>`;
+      const statusPill = s.active ? `<span class="pill ok">Active</span>` : `<span class="pill bad">Inactive</span>`;
+      const compPill = s.compliant ? `<span class="pill ok">✅</span>` : `<span class="pill bad">❌</span>`;
+        
       rows += `<tr>
         <td>${i + 1}</td>
         <td class="mono" style="font-size:0.78rem;">${shortAddr(s.addr)}</td>
@@ -854,13 +876,18 @@ async function refreshStats() {
         <td>${Number(s.qty[1])}</td>
         <td>${Number(s.qty[2])}</td>
         <td>${Number(s.qty[3])}</td>
+        <td>${Number(s.qty[4])}</td>
+        <td>${Number(s.qty[5])}</td>
+        <td>${Number(s.qty[6])}</td>
+        <td>${Number(s.qty[7])}</td>
         <td><b>${totalSup}</b></td>
       </tr>`;
     });
+    
     const body = document.getElementById("allSuppliersBody");
-    if (body) body.innerHTML = rows || `<tr><td colspan="9" style="text-align:center;" class="muted">No suppliers match filters</td></tr>`;
+    // FIX 5: Updated colspan to 13
+    if (body) body.innerHTML = rows || `<tr><td colspan="13" style="text-align:center;" class="muted">No suppliers match filters</td></tr>`;
 
-    // also update the legacy aggregate KPI ids if present
     setTxt("aggWater", aggregatePerResource[0].toString());
     setTxt("aggClothing", aggregatePerResource[1].toString());
     setTxt("aggMedicine", aggregatePerResource[2].toString());
@@ -1152,4 +1179,214 @@ document.addEventListener("DOMContentLoaded", () => {
       await refreshAll();
     } catch (e) { toast("error", getErrorMessage(e)); } finally { showLoading(false); }
   });
+});
+
+// ============================================================
+// TIMELINE FEATURE (SAFE VERSION)
+// ============================================================
+
+const TIMELINE_DATA = {
+  earthquake: {
+    title: "🌋 Magnitude 6.8 Earthquake — Himalayan Foothills",
+    location: "Uttarakhand, India",
+    severity: "Critical",
+    hours: [
+      { h: 0, title: "Seismic Pre-cursors", icon: "📡", action: "Seismographs detect tremors", teams: 0, rescued: 0, resources: 0, story: "At 00:00, the IMD network picks up micro-tremors along the Main Himalayan Thrust. Duty officers log a 2.1 magnitude foreshock. Nothing alarming yet, but the pattern is monitored." },
+      { h: 1, title: "The Earth Shakes", icon: "🌋", action: "6.8 magnitude earthquake strikes", teams: 0, rescued: 0, resources: 0, story: "01:17 IST. The ground tears open. Buildings collapse across 14 villages. Power grids fail instantly. The first distress calls come from a single amateur radio operator in Joshimath." },
+      { h: 2, title: "Emergency Alert", icon: "🚨", action: "NDRF activated", teams: 0, rescued: 0, resources: 0, story: "The NDRF 8th Battalion base in Ghaziabad scrambles into action. 240 personnel prepare to deploy. States of emergency are drafted for three districts." },
+      { h: 3, title: "First Responders Deploy", icon: "🚁", action: "6 rescue teams deployed", teams: 6, rescued: 0, resources: 120, story: "03:45 IST. The first helicopters lift off. Radio contact is re-established. Initial estimate: 1,200 trapped. The race against time has begun." },
+      { h: 4, title: "Supply Chains Mobilized", icon: "📦", action: "Water & medicine dispatched", teams: 6, rescued: 0, resources: 480, story: "A convoy leaves Rishikesh with 8,000 water bottles and 3,000 blankets. Blockchain-tracked suppliers automatically flag their inventory for dispatch." },
+      { h: 5, title: "First Rescue", icon: "⛑️", action: "12 survivors pulled from debris", teams: 8, rescued: 12, resources: 520, story: "05:30 IST. A thermal drone spots a family under a collapsed school. 12 survivors are pulled out alive. Hope spreads." },
+      { h: 6, title: "Field Hospital Set Up", icon: "🏥", action: "Mobile hospital operational", teams: 12, rescued: 28, resources: 760, story: "A 40-bed field hospital is erected. Army medics arrive. The blockchain medical supply chain verifies 2,400 medicine units are in transit." },
+      { h: 7, title: "Aftershock Strikes", icon: "⚠️", action: "5.2 magnitude aftershock", teams: 12, rescued: 31, resources: 800, story: "07:11 IST. An aftershock rips through the rescue zone. Teams temporarily pull back. Drone footage reveals new pockets of trapped civilians." },
+      { h: 8, title: "Air Bridge Established", icon: "✈️", action: "Continuous helicopter air bridge", teams: 14, rescued: 52, resources: 1050, story: "Land routes are blocked. 14 sorties per hour are established. The on-chain registry now shows 240,000 units of resources committed." },
+      { h: 9, title: "Evacuation Ordered", icon: "🚌", action: "1,400 villagers evacuated", teams: 16, rescued: 89, resources: 1240, story: "The district magistrate orders evacuation. 1,400 villagers board 42 buses. Blankets and warm food are distributed in relief camps." },
+      { h: 10, title: "Medical Triage Peak", icon: "💊", action: "180 injured treated", teams: 16, rescued: 112, resources: 1480, story: "The field hospital hits peak capacity. 32 critical cases are airlifted. The DApp dashboard shows compliance rate has climbed to 87%." },
+      { h: 11, title: "International Aid", icon: "🌐", action: "UN & foreign aid accepted", teams: 18, rescued: 130, resources: 1800, story: "Two C-17 aircraft land with 40 tons of supplies. Cross-border supply chains are now being tracked on-chain with full transparency." },
+      { h: 12, title: "Halfway Point", icon: "📍", action: "Situation stabilized", teams: 20, rescued: 148, resources: 2100, story: "148 rescued, 61 confirmed dead. 20 teams are operational. The worst of the immediate crisis has passed, but search and rescue continues." },
+      { h: 13, title: "Night Operations", icon: "🔦", action: "Thermal imaging deployed", teams: 20, rescued: 165, resources: 2250, story: "Rescue operations shift to thermal imaging. A 5-year-old boy is found alive under a wooden beam. His rescue is broadcast live." },
+      { h: 14, title: "Supply Chain Verified", icon: "🔗", action: "On-chain audit completed", teams: 20, rescued: 178, resources: 2500, story: "A full audit shows 96% of all resources delivered have come from compliant, verified suppliers. Non-compliant suppliers are automatically deactivated." },
+      { h: 15, title: "Second Aftershock", icon: "⚠️", action: "4.4 magnitude aftershock", teams: 20, rescued: 181, resources: 2550, story: "A 4.4 magnitude aftershock is felt. Teams are already in reinforced positions. No new collapses. The valley is stabilizing." },
+      { h: 16, title: "Rehabilitation Begins", icon: "🏗️", action: "Temporary shelters built", teams: 18, rescued: 190, resources: 2800, story: "2,000 temporary shelters are erected. Families are reunited. The government announces a relief package." },
+      { h: 17, title: "Disease Surveillance", icon: "🦠", action: "Epidemic prevention deployed", teams: 18, rescued: 195, resources: 3000, story: "Medical teams fan out to test wells and distribute chlorine tablets. Vaccination for 3,000 children begins." },
+      { h: 18, title: "Restoring Connectivity", icon: "📡", action: "Mobile towers restored", teams: 16, rescued: 200, resources: 3150, story: "Engineers restore 6 mobile towers. For the first time in 18 hours, 8,000 people can call their families." },
+      { h: 19, title: "Volunteer Surge", icon: "🙋", action: "2,400 volunteers register", teams: 22, rescued: 204, resources: 3300, story: "Doctors, engineers, and drivers register through the portal. Community kitchens open, serving 8,000 hot meals per day." },
+      { h: 20, title: "Rescue Complete", icon: "✅", action: "All trapped survivors rescued", teams: 20, rescued: 211, resources: 3400, story: "The NDRF announces all known trapped survivors have been rescued. 211 people saved. The final rescue is a 62-year-old woman." },
+      { h: 21, title: "Damage Assessment", icon: "📊", action: "Structural survey begins", teams: 15, rescued: 211, resources: 3500, story: "1,100 homes are classified as destroyed. A satellite-based damage map is uploaded to the blockchain for transparency." },
+      { h: 22, title: "Aid Distribution Peak", icon: "🎁", action: "15,000 relief kits distributed", teams: 18, rescued: 211, resources: 3800, story: "Every kit is barcoded and logged on-chain. There is no double-distribution and no corruption." },
+      { h: 23, title: "Dawn Breaks", icon: "🌅", action: "Recovery phase formalized", teams: 16, rescued: 211, resources: 3950, story: "The emergency phase is formally over. The final tally: 211 rescued, 8,400 families supported, and zero diversion of aid." }
+    ]
+  },
+  flood: {
+    title: "🌊 Catastrophic Flooding — Godavari River Basin",
+    location: "Andhra Pradesh, India",
+    severity: "Critical",
+    hours: [
+      { h: 0, title: "Torrential Rain", icon: "🌧️", action: "200mm rainfall in 6 hours", teams: 0, rescued: 0, resources: 0, story: "The IMD records 200mm of rainfall in just 6 hours. Reservoirs are at 92% capacity. The river is rising fast." },
+      { h: 1, title: "River Overflows", icon: "🌊", action: "Godavari breaches embankment", teams: 0, rescued: 0, resources: 0, story: "01:30 IST. Water surges through 12 villages. 1,400 homes are flooded. The local police launch rescue boats." },
+      { h: 2, title: "State Alert", icon: "🚨", action: "NDRF & SDRF activated", teams: 0, rescued: 0, resources: 0, story: "12 teams of NDRF and 8 teams of SDRF are deployed. The chief minister addresses the state, urging residents to move to higher ground." },
+      { h: 3, title: "Mass Rescue Launched", icon: "🚤", action: "24 rescue boats deployed", teams: 8, rescued: 45, resources: 100, story: "The first rescue boats hit the water. By 03:45, 45 people are pulled from rooftops. A 4-year-old is found clinging to a floating door." },
+      { h: 4, title: "Emergency Shelters Open", icon: "🏠", action: "18 relief camps established", teams: 10, rescued: 120, resources: 400, story: "18 relief camps are opened. They quickly fill with 4,000 displaced people. Blankets and dry food are distributed." },
+      { h: 5, title: "Helicopter Rescue", icon: "🚁", action: "8 airlifted from stranded rooftop", teams: 12, rescued: 165, resources: 480, story: "A family of 8 is spotted on a rooftop. Two Air Force helicopters are dispatched. The rescue takes 40 minutes." },
+      { h: 6, title: "Dam Release Warning", icon: "⚠️", action: "Upstream dam releases water", teams: 14, rescued: 210, resources: 600, story: "The upstream dam begins controlled release. Downstream villages have 2 hours to evacuate. Sirens blare across 22 villages." },
+      { h: 7, title: "Evacuation Sprint", icon: "🚌", action: "14,000 evacuated in 2 hours", teams: 16, rescued: 280, resources: 700, story: "320 buses are commandeered. By 07:55, 14,000 people are on higher ground. Not a single life is lost in this evacuation." },
+      { h: 8, title: "Flood Peak", icon: "🌊", action: "Water level peaks at 14 metres", teams: 16, rescued: 290, resources: 750, story: "The flood peaks at 14 metres above normal. 40% of the city is underwater. But the people are safe." },
+      { h: 9, title: "Medical Emergency", icon: "💊", action: "Field hospital set up", teams: 18, rescued: 310, resources: 900, story: "A field hospital is set up at the stadium. They treat 80 patients in the first 2 hours. Medical supply chains are verified." },
+      { h: 10, title: "Air-Drop Operations", icon: "📦", action: "5,000 relief kits air-dropped", teams: 18, rescued: 330, resources: 1100, story: "The Air Force begins air-dropping relief kits. Each kit is marked with a QR code linked to the blockchain." },
+      { h: 11, title: "Volunteer Mobilization", icon: "🙋", action: "1,800 volunteers deployed", teams: 20, rescued: 350, resources: 1200, story: "1,800 volunteers respond in 2 hours. They are trained and deployed to camps to cook food and distribute supplies." },
+      { h: 12, title: "Rescue Statistics", icon: "📍", action: "350 rescued, 1,800 in camps", teams: 22, rescued: 370, resources: 1350, story: "The 12-hour mark. 370 rescued. Water is receding slowly. The worst is over." },
+      { h: 13, title: "Disease Prevention", icon: "🦠", action: "Water chlorination begins", teams: 20, rescued: 375, resources: 1450, story: "Teams begin chlorinating 400 wells. 30,000 chlorine tablets are distributed. Health workers educate about hygiene." },
+      { h: 14, title: "Bridge Restoration", icon: "🌉", action: "Bailey bridge built in 6 hours", teams: 18, rescued: 378, resources: 1550, story: "Army engineers work to build a Bailey bridge. It opens at 14:30, restoring road access. The city is no longer isolated." },
+      { h: 15, title: "Family Reunification", icon: "👨‍👩‍👧", action: "340 families reunited", teams: 16, rescued: 382, resources: 1650, story: "A family reunification centre is set up. 340 families are reunited using the blockchain ID system." },
+      { h: 16, title: "Aid Corruption Check", icon: "🔗", action: "On-chain audit: zero diversion", teams: 15, rescued: 385, resources: 1750, story: "A full on-chain audit of all relief materials is conducted. Result: zero diversion. Full transparency is achieved." },
+      { h: 17, title: "Receding Water", icon: "📉", action: "Water recedes 2 metres", teams: 14, rescued: 390, resources: 1850, story: "The floodwater has receded 2 metres. 4 villages are accessible. Damage assessment begins." },
+      { h: 18, title: "Supply Chain Peak", icon: "📦", action: "25,000 relief kits delivered", teams: 15, rescued: 392, resources: 2000, story: "Cumulative 25,000 relief kits delivered. Every supplier on our blockchain has been audited. The logistics are extraordinary." },
+      { h: 19, title: "Aid Coordination", icon: "🤝", action: "UN & NGOs coordinate", teams: 16, rescued: 395, resources: 2150, story: "A shared blockchain dashboard is set up so every organization can see what's needed. Duplication is avoided." },
+      { h: 20, title: "Emotional Toll", icon: "❤️", action: "Psychosocial support begins", teams: 18, rescued: 398, resources: 2250, story: "40 counsellors arrive to provide psychosocial first aid. Children draw and play in child-friendly spaces." },
+      { h: 21, title: "Restoring Power", icon: "⚡", action: "Power restored in 12 villages", teams: 14, rescued: 400, resources: 2350, story: "Power engineers restore electricity to 12 villages. Streetlights come on for the first time since the flood." },
+      { h: 22, title: "Health Check-ups", icon: "🩺", action: "6,000 health screenings", teams: 14, rescued: 400, resources: 2450, story: "Medical teams screen 6,000 people for post-flood diseases. The epidemic has been prevented through early intervention." },
+      { h: 23, title: "First Phase Complete", icon: "🌅", action: "Emergency response ends", teams: 12, rescued: 400, resources: 2500, story: "24 hours. 400 rescued. Zero corruption. The emergency phase ends. The blockchain ledger is complete." }
+    ]
+  },
+  tsunami: {
+    title: "🌊 Tsunami Warning — Eastern Coast",
+    location: "Tamil Nadu & Andhra Coast",
+    severity: "Critical",
+    hours: Array.from({ length: 24 }, (_, i) => ({
+      h: i, title: `Hour ${i} Operations`, icon: "🌊", action: "Tsunami response actions", teams: i * 2, rescued: i * 10, resources: i * 100,
+      story: `Hour ${i}: Emergency teams are actively coordinating tsunami relief efforts along the eastern coast. Supplies are being distributed and civilians moved to higher ground.`
+    }))
+  },
+  cyclone: {
+    title: "🌀 Severe Cyclone — Odisha Coast",
+    location: "Odisha, India",
+    severity: "High",
+    hours: Array.from({ length: 24 }, (_, i) => ({
+      h: i, title: `Hour ${i} Operations`, icon: "🌀", action: "Cyclone response actions", teams: i * 2, rescued: i * 10, resources: i * 100,
+      story: `Hour ${i}: Emergency teams are actively coordinating cyclone relief efforts. Supplies are being distributed and civilians moved to shelters.`
+    }))
+  }
+};
+
+let currentScenario = 'earthquake';
+let selectedHour = null;
+let playInterval = null;
+
+window.renderTimeline = function() {
+  const data = TIMELINE_DATA[currentScenario];
+  if(!data) return;
+
+  // Update Meta
+  const meta = document.getElementById("timelineMeta");
+  if(meta) {
+    meta.innerHTML = `
+      <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-top:1rem;">
+        <div><span class="muted" style="font-size:0.8rem;">EVENT</span><br><b>${data.title}</b></div>
+        <div><span class="muted" style="font-size:0.8rem;">LOCATION</span><br><b>${data.location}</b></div>
+        <div><span class="muted" style="font-size:0.8rem;">SEVERITY</span><br><b style="color:#fca5a5;">${data.severity}</b></div>
+      </div>
+    `;
+  }
+
+  // Update Hour Strip
+  const strip = document.getElementById("hourStrip");
+  if(strip) {
+    strip.innerHTML = data.hours.map((h, i) => {
+      const isActive = selectedHour === i;
+      const cls = h.h === 0 ? 'disaster' : h.h <= 4 ? 'critical' : 'normal';
+      return `
+        <div class="hour-box ${isActive ? 'active' : ''}" onclick="window.selectHour(${i})">
+          <div class="hb-time">${String(h.h).padStart(2, '0')}:00</div>
+          <div class="hb-icon">${h.icon}</div>
+          <div class="hb-title">${h.title}</div>
+        </div>
+      `;
+    }).join("");
+  }
+
+  // Update Summary Stats
+  const last = data.hours[23];
+  const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+  if(last) {
+    set("tlCritical", data.hours.filter(h => h.h <= 4).length);
+    set("tlResources", last.resources.toLocaleString());
+    set("tlRescued", last.rescued.toLocaleString());
+    set("tlTeams", last.teams);
+  }
+};
+
+window.selectHour = function(index) {
+  selectedHour = index;
+  const data = TIMELINE_DATA[currentScenario];
+  const h = data.hours[index];
+  
+  // Re-render strip to update active state
+  window.renderTimeline();
+  
+  // Update Detail Card
+  const detail = document.getElementById("timelineDetail");
+  if(detail) {
+    detail.innerHTML = `
+      <div class="td-header">
+        <span class="td-time">Hour ${String(h.h).padStart(2, '0')}:00</span>
+        <span class="td-icon">${h.icon}</span>
+        <div class="td-titles">
+          <h3>${h.title}</h3>
+          <p class="muted">${h.action}</p>
+        </div>
+      </div>
+      <div class="td-stats">
+        <div class="td-stat"><span class="muted">Teams</span><b>${h.teams}</b></div>
+        <div class="td-stat"><span class="muted">Rescued</span><b>${h.rescued}</b></div>
+        <div class="td-stat"><span class="muted">Resources</span><b>${h.resources.toLocaleString()}</b></div>
+      </div>
+      <div class="td-story">
+        <p>${h.story}</p>
+      </div>
+    `;
+  }
+
+  // Update progress bar
+  const prog = document.getElementById("timelineProgressFill");
+  if(prog) prog.style.width = `${((index + 1) / 24) * 100}%`;
+};
+
+// Wire up buttons safely
+document.addEventListener("DOMContentLoaded", () => {
+  // Scenario Buttons
+  document.querySelectorAll(".scenario-btn").forEach(btn => {
+    btn.addEventListener("click", (e) => {
+      document.querySelectorAll(".scenario-btn").forEach(b => b.classList.remove("active"));
+      e.target.classList.add("active");
+      currentScenario = e.target.dataset.scenario;
+      selectedHour = null;
+      window.renderTimeline();
+      document.getElementById("timelineDetail").innerHTML = `<div class="empty-timeline"><span style="font-size:2.5rem;">🕐</span><p>Select an hour above to view the action & story</p></div>`;
+      document.getElementById("timelineProgressFill").style.width = "0%";
+    });
+  });
+
+  // Play / Reset
+  document.getElementById("playTimelineBtn")?.addEventListener("click", () => {
+    if(playInterval) { clearInterval(playInterval); playInterval = null; document.getElementById("playbackStatus").textContent = "Paused"; return; }
+    if(selectedHour === null) selectedHour = 0;
+    document.getElementById("playbackStatus").textContent = "Playing...";
+    playInterval = setInterval(() => {
+      selectedHour++;
+      if(selectedHour > 23) { clearInterval(playInterval); playInterval = null; document.getElementById("playbackStatus").textContent = "Completed"; return; }
+      window.selectHour(selectedHour);
+    }, 1500);
+  });
+
+  document.getElementById("resetTimelineBtn")?.addEventListener("click", () => {
+    if(playInterval) { clearInterval(playInterval); playInterval = null; }
+    selectedHour = null;
+    document.getElementById("playbackStatus").textContent = "Ready";
+    window.renderTimeline();
+    document.getElementById("timelineDetail").innerHTML = `<div class="empty-timeline"><span style="font-size:2.5rem;">🕐</span><p>Select an hour above to view the action & story</p></div>`;
+    document.getElementById("timelineProgressFill").style.width = "0%";
+  });
+
+  // Initial Render
+  window.renderTimeline();
 });

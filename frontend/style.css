@@ -408,3 +408,12 @@ label { display: block; font-size: 0.82rem; color: var(--text-muted); margin-bot
 .pill.ok  { background: rgba(16,185,129,0.15); color: #6ee7b7; }
 .pill.bad { background: rgba(239,68,68,0.15);  color: #fca5a5; }
 .pill.warn{ background: rgba(245,158,11,0.15); color: #fcd34d; }
+
+/* NEW RESOURCE COLORS */
+.resource-tile.shelter { --tile-color: #8b5cf6; }
+.resource-tile.fuel { --tile-color: #ef4444; }
+.resource-tile.hygiene { --tile-color: #06b6d4; }
+.resource-tile.power { --tile-color: #facc15; }
+
+/* Fix queue input text alignment */
+.queue-item input { text-align: left; }
